@@ -274,7 +274,11 @@ def plot_all(
         # resolve legend kwargs
         legend_kwargs = {
             "ncol": 1,
-            "loc": "upper right",
+            "loc": "center left",
+            "bbox_to_anchor": (1, 0.5),  # Position the legend outside the plot
+                                         # Moves the legend to the right side of the plot.
+                                         # The first value (1) controls the horizontal position,
+                                         # and the second value (0.95) controls the vertical position.
         }
         legend_kwargs.update(style_config.get("legend_cfg", {}))
 
