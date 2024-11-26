@@ -1,7 +1,7 @@
 # coding: utf-8
 
 """
-MET corrections.
+PuppiMET corrections.
 """
 
 from columnflow.calibration import Calibrator, calibrator
@@ -13,8 +13,8 @@ ak = maybe_import("awkward")
 
 
 @calibrator(
-    uses={"run", "PV.npvs", "MET.pt", "MET.phi"},
-    produces={"MET.pt", "MET.phi"},
+    uses={"run", "PV.npvs", "PuppiMET.pt", "PuppiMET.phi"},
+    produces={"PuppiMET.pt", "PuppiMET.phi"},
     # function to determine the correction file
     get_met_file=(lambda self, external_files: external_files.met_phi_corr),
     # function to determine met correction config
@@ -22,9 +22,9 @@ ak = maybe_import("awkward")
 )
 def met_phi(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
     """
-    Performs the MET phi (type II) correction using the
+    Performs the PuppiMET phi (type II) correction using the
     :external+correctionlib:doc:`index` for events there the
-    uncorrected MET pt is below the beam energy (extracted from ``config_inst.campaign.ecm * 0.5``).
+    uncorrected PuppiMET pt is below the beam energy (extracted from ``config_inst.campaign.ecm * 0.5``).
     Requires an external file in the config under ``met_phi_corr``:
 
     .. code-block:: python
@@ -50,16 +50,16 @@ def met_phi(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
     :param events: awkward array containing events to process
     """
     # copy the intial pt and phi values
-    corr_pt = np.array(events.MET.pt, dtype=np.float32)
-    corr_phi = np.array(events.MET.phi, dtype=np.float32)
+    corr_pt = np.array(events.PuppiMET.pt, dtype=np.float32)
+    corr_phi = np.array(events.PuppiMET.phi, dtype=np.float32)
 
-    # select only events where MET pt is below the expected beam energy
-    mask = events.MET.pt < (0.5 * self.config_inst.campaign.ecm)
+    # select only events where PuppiMET pt is below the expected beam energy
+    mask = events.PuppiMET.pt < (0.5 * self.config_inst.campaign.ecm)
 
     # arguments for evaluation
     args = (
-        events.MET.pt[mask],
-        events.MET.phi[mask],
+        events.PuppiMET.pt[mask],
+        events.PuppiMET.phi[mask],
         ak.values_astype(events.PV.npvs[mask], np.float32),
         ak.values_astype(events.run[mask], np.float32),
     )
@@ -69,8 +69,8 @@ def met_phi(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
     corr_phi[mask] = self.met_phi_corrector.evaluate(*args)
 
     # save the corrected values
-    events = set_ak_column(events, "MET.pt", corr_pt, value_type=np.float32)
-    events = set_ak_column(events, "MET.phi", corr_phi, value_type=np.float32)
+    events = set_ak_column(events, "PuppiMET.pt", corr_pt, value_type=np.float32)
+    events = set_ak_column(events, "PuppiMET.phi", corr_phi, value_type=np.float32)
 
     return events
 
@@ -97,7 +97,7 @@ def met_phi_setup(self: Calibrator, reqs: dict, inputs: dict, reader_targets: di
     :param reader_targets: Additional targets, currently not used.
     """
     bundle = reqs["external_files"]
-
+    
     # create the pt and phi correctors
     import correctionlib
     correction_set = correctionlib.CorrectionSet.from_string(

@@ -22,7 +22,7 @@ logger = law.logger.get_logger(__name__)
 
 @selector(
     uses={
-        "Jet.{pt,eta,phi,mass,jetId,chEmEF}",
+        "Jet.{pt,eta,phi,mass,jetId,chEmEF}", 
         "Muon.{pt,eta,phi,mass,isPFcand}",
         optional("Jet.puId"),
     },
@@ -60,7 +60,7 @@ def jet_veto_map(
     # loose jet selection
     jet_mask = (
         (jet.pt > 15) &
-        (jet.jetId >= 2) &  # tight id
+        (jet.jetId >= 2) &  # tight id 
         (jet.chEmEF < 0.9) &
         ak.all(events.Jet.metric_table(muon) >= 0.2, axis=2)
     )
