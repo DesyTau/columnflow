@@ -33,7 +33,8 @@ mpl = maybe_import("matplotlib")
 plt = maybe_import("matplotlib.pyplot")
 mplhep = maybe_import("mplhep")
 od = maybe_import("order")
-import warnings
+
+logger = law.logger.get_logger(__name__)
 
 def plot_variable_per_process(
     hists: OrderedDict,
@@ -50,8 +51,10 @@ def plot_variable_per_process(
     **kwargs,
 ) -> plt.Figure:
     """
-    Plots histograms for multiple processes, ordering them by the total number of events in ascending order
-    and assigning specific colors to each process based on a predefined color map.
+    Plots histograms for multiple processes, ordering them by a custom order:
+    the process with the highest number of events first, followed by the others,
+    and the process with the second highest number of events last.
+    Handles cases with only one or two processes.
     """
     remove_residual_axis(hists, "shift")
 
@@ -68,10 +71,25 @@ def plot_variable_per_process(
     # Calculate the total number of events for each process
     total_events = {key: sum(hist.values()) for key, hist in hists.items()}
 
-    # Sort processes by total number of events in ascending order
-    # sorted_hists = OrderedDict(sorted(hists.items(), key=lambda item: total_events[item[0]]))
     # Sort processes by total number of events in descending order
-    sorted_hists = OrderedDict(sorted(hists.items(), key=lambda item: total_events[item[0]], reverse=True))
+    sorted_hists_desc = OrderedDict(sorted(hists.items(), key=lambda item: total_events[item[0]], reverse=True))
+
+    # Get keys of sorted processes
+    sorted_keys = list(sorted_hists_desc.keys())
+
+    # Handle cases with 1 or 2 processes
+    if len(sorted_keys) == 1:
+        # Only one process, no special reordering needed
+        custom_order = sorted_keys
+    elif len(sorted_keys) == 2:
+        # Two processes, highest first, then second highest
+        custom_order = sorted_keys
+    else:
+        # More than two processes, custom order: highest, rest, then second highest
+        custom_order = [sorted_keys[0]] + sorted_keys[2:] + [sorted_keys[1]]
+
+    # Reorder histograms based on custom order
+    sorted_hists = OrderedDict((key, sorted_hists_desc[key]) for key in custom_order)
 
     variable_inst = variable_insts[0]
     sorted_hists = apply_variable_settings(sorted_hists, variable_insts, variable_settings)
@@ -83,7 +101,6 @@ def plot_variable_per_process(
         shape_norm=shape_norm,
         hide_errors=hide_errors,
     )
-    
 
     if 'data' not in plot_config:
 
@@ -100,12 +117,10 @@ def plot_variable_per_process(
         elif num_processes <= 24:
             colors = color_maps["10"] + color_maps["8"] + color_maps["6"][:num_processes - 18]
         else:
-            warnings.warn("You are about to plot more than 24 processes together, please reconsider... (Colors not in the approved palette will be assigned)")
+            logger.warning("You are about to plot more than 24 processes together, please reconsider... (Colors not in the approved palette will be assigned)")
             colors = color_maps["10"] + color_maps["8"] + color_maps["6"]
             colors += basic_colors[:num_processes - 24]
         plot_config["mc_stack"]["kwargs"]["color"] = colors[:num_processes]
-
-
 
     default_style_config = prepare_style_config(
         config_inst, category_inst, variable_inst, density, shape_norm, yscale,
@@ -116,6 +131,7 @@ def plot_variable_per_process(
         style_config["ax_cfg"]["ylabel"] = r"$\Delta N/N$"
 
     return plot_all(plot_config, style_config, **kwargs)
+
 
 
 # def plot_variable_per_process(
