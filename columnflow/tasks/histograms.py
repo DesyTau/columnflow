@@ -172,7 +172,7 @@ class CreateHistograms(
             mode="r",
         ) as inps:
             for (events, *columns), pos in self.iter_chunked_io(
-                [inp.path for inp in inps],
+                [inp.abspath for inp in inps],
                 source_type=len(file_targets) * ["awkward_parquet"] + [None] * len(reader_targets),
                 read_columns=(len(file_targets) + len(reader_targets)) * [read_columns],
                 chunk_size=self.weight_producer_inst.get_min_chunk_size(),
@@ -193,7 +193,7 @@ class CreateHistograms(
                 )
 
                 # build the full event weight
-                if not self.weight_producer_inst.skip_func():
+                if hasattr(self.weight_producer_inst, "skip_func") and not self.weight_producer_inst.skip_func():
                     events, weight = self.weight_producer_inst(events)
                 else:
                     weight = ak.Array(np.ones(len(events), dtype=np.float32))
