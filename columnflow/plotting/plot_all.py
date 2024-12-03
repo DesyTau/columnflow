@@ -273,13 +273,15 @@ def plot_all(
     if not skip_legend:
         # resolve legend kwargs
         legend_kwargs = {
-            "ncol": 1,
+            "ncol": 2,
             "loc": "center left",
-            "bbox_to_anchor": (1, 0.5),  # Position the legend outside the plot
+            "bbox_to_anchor": (0.35, 0.8),  # Position the legend outside the plot
                                          # Moves the legend to the right side of the plot.
                                          # The first value (1) controls the horizontal position,
                                          # and the second value (0.95) controls the vertical position.
+            "fontsize": 16, 
         }
+        
         legend_kwargs.update(style_config.get("legend_cfg", {}))
 
         # retrieve the legend handles and their labels
