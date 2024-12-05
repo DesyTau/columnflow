@@ -91,12 +91,12 @@ def plot_variable_per_process(
     sorted_hists = OrderedDict((key, sorted_hists_desc[key]) for key in custom_order)
 
     variable_inst = variable_insts[0]
-    sorted_hists = apply_variable_settings(sorted_hists, variable_insts, variable_settings)
-    sorted_hists = apply_process_settings(sorted_hists, process_settings)
-    sorted_hists = apply_density_to_hists(sorted_hists, density)
+    hists = apply_variable_settings(hists, variable_insts, variable_settings)
+    hists = apply_process_settings(hists, process_settings)
+    hists = apply_density_to_hists(hists, density)
 
     plot_config = prepare_plot_config(
-        sorted_hists,
+        hists,
         shape_norm=shape_norm,
         hide_errors=hide_errors,
     )
@@ -104,7 +104,7 @@ def plot_variable_per_process(
     if 'data' not in plot_config:
 
         # Determine the appropriate color map based on the number of processes
-        num_processes = len(sorted_hists)
+        num_processes = len(hists)
         if num_processes <= 6:
             colors = color_maps["6"][:num_processes]
         elif num_processes == 7:
