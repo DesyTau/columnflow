@@ -1,254 +1,3 @@
-# # coding: utf-8
-
-# """
-# Tasks to plot different types of histograms.
-# """
-
-# from collections import OrderedDict
-# from abc import abstractmethod
-
-# import law
-# import luigi
-
-# from columnflow.tasks.framework.base import Requirements, ShiftTask
-# from columnflow.tasks.framework.mixins import (
-#     CalibratorsMixin, SelectorStepsMixin, ProducersMixin, MLModelsMixin,
-#     CategoriesMixin, ShiftSourcesMixin,
-# )
-# from columnflow.tasks.framework.plotting import (
-#     PlotBase, PlotBase2D, ProcessPlotSettingMixin, VariablePlotSettingMixin,
-# )
-# from columnflow.tasks.framework.decorators import view_output_plots
-# from columnflow.tasks.framework.remote import RemoteWorkflow
-# from columnflow.tasks.histograms import MergeHistograms
-# from columnflow.util import DotDict, dev_sandbox, dict_add_strict
-
-
-# class DataDrivenEstimationBase(
-#     VariablePlotSettingMixin,
-#     ProcessPlotSettingMixin,
-#     CategoriesMixin,
-#     MLModelsMixin,
-#     ProducersMixin,
-#     SelectorStepsMixin,
-#     CalibratorsMixin,
-#     law.LocalWorkflow,
-#     RemoteWorkflow,
-# ):
-#     sandbox = dev_sandbox(law.config.get("analysis", "default_columnar_sandbox"))
-#     """sandbox to use for this task. Defaults to *default_columnar_sandbox* from
-#     analysis config.
-#     """
-
-#     exclude_index = True
-
-#     # upstream requirements
-#     reqs = Requirements(
-#         RemoteWorkflow.reqs,
-#         MergeHistograms=MergeHistograms,
-#     )
-#     """Set upstream requirements, in this case :py:class:`~columnflow.tasks.histograms.MergeHistograms`
-#     """
-
-#     def store_parts(self):
-#         parts = super().store_parts()
-#         parts.insert_before("version", "plot", f"datasets_{self.datasets_repr}")
-#         return parts
-
-#     def create_branch_map(self):
-#         return [
-#             DotDict({"category": cat_name, "variable": var_name})
-#             for cat_name in sorted(self.categories)
-#             for var_name in sorted(self.variables)
-#         ]
-
-#     def workflow_requires(self):
-#         reqs = super().workflow_requires()
-
-#         reqs["merged_hists"] = self.requires_from_branch()
-
-#         return reqs
-
-#     @abstractmethod
-#     def get_plot_shifts(self):
-#         return
-    
-#     @law.decorator.log
-#     @view_output_plots
-#     def run(self):
-#         import hist
-#         import numpy as np
-#         from cmsdb.processes.qcd import qcd
-
-#         # get the shifts to extract and plot
-#         plot_shifts = law.util.make_list(self.get_plot_shifts())
-
-#         # prepare config objects
-#         variable_tuple = self.variable_tuples[self.branch_data.variable]
-#         variable_insts = [
-#             self.config_inst.get_variable(var_name)
-#             for var_name in variable_tuple
-#         ]
-#         category_inst = self.config_inst.get_category(self.branch_data.category)
-#         leaf_category_insts = category_inst.get_leaf_categories() or [category_inst]
-#         process_insts = list(map(self.config_inst.get_process, self.processes))
-#         sub_process_insts = {
-#             proc: [sub for sub, _, _ in proc.walk_processes(include_self=True)]
-#             for proc in process_insts
-#         }
-
-#         # histogram data per process
-#         hists = {}
-#         if 'ff_control_reg' in category_inst.name :
-#             with self.publish_step(f"estimating qcd for {self.branch_data.variable} in {category_inst.name}"):
-#                 for dataset, inp in self.input().items():
-#                     dataset_inst = self.config_inst.get_dataset(dataset)
-#                     h_in = inp["collection"][0]["hists"].targets[self.branch_data.variable].load(formatter="pickle")
-
-#                     # loop and extract one histogram per process
-#                     for process_inst in process_insts:
-#                         # skip when the dataset is already known to not contain any sub process
-#                         if not any(map(dataset_inst.has_process, sub_process_insts[process_inst])):
-#                             continue
-#                         # work on a copy
-#                         h = h_in.copy()
-#                         # axis selections
-#                         h = h[{
-#                             "process": [
-#                                 hist.loc(p.id)
-#                                 for p in sub_process_insts[process_inst]
-#                                 if p.id in h.axes["process"]
-#                             ],
-#                             "category": [
-#                                 hist.loc(c.id)
-#                                 for c in leaf_category_insts
-#                                 if c.id in h.axes["category"]
-#                             ],
-#                             "shift": [
-#                                 hist.loc(s.id)
-#                                 for s in plot_shifts
-#                                 if s.id in h.axes["shift"]
-#                             ],
-#                         }]
-
-#                         # axis reductions
-#                         h = h[{"process": sum, "category": sum}]
-
-#                         # add the histogram
-#                         if process_inst in hists:
-#                             hists[process_inst] += h
-#                         else:
-#                             hists[process_inst] = h
-
-#                 # there should be hists to plot
-#                 if not hists:
-#                     raise Exception(
-#                         "no histograms found to plot; possible reasons:\n" +
-#                         "  - requested variable requires columns that were missing during histogramming\n" +
-#                         "  - selected --processes did not match any value on the process axis of the input histogram",
-#                     )
-
-#                 # sort hists by process order
-#                 hists = OrderedDict(
-#                     (process_inst.copy_shallow(), hists[process_inst])
-#                     for process_inst in sorted(hists, key=process_insts.index)
-#                 )
-                
-#                 qcd_hist = None
-#                 qcd_hist_values = None
-#                 for process_inst, h in hists.items():
-#                     hist_np , _ , _ = h.to_numpy(flow=True)
-#                     if qcd_hist is None:
-#                         qcd_hist = h.copy()
-#                         qcd_hist_values = np.zeros_like(hist_np)
-#                     if process_inst.is_data: qcd_hist_values += hist_np
-#                     else: qcd_hist_values -= hist_np
-                
-#                 #if the array contains negative values, set them to zero
-#                 qcd_hist_values = np.where(qcd_hist_values > 0, qcd_hist_values, 0)
-#                 qcd_hist.view(flow=True).value[:] = qcd_hist_values
-#                 qcd_hist.view(flow=True).variance[:] = np.zeros_like(qcd_hist_values)
-#                 qcd_hist
-#                 #register a new datased at the hlist
-#                 hists[qcd] = qcd_hist
-#                 #save qcd estimation histogram and plots only for control region
-                
-#                 self.output()["qcd_hists"][self.branch_data.variable].dump(qcd_hist, formatter="pickle")
-#                 # call the plot function
-#                 fig, _ = self.call_plot_func(
-#                     self.plot_function,
-#                     hists=hists,
-#                     config_inst=self.config_inst,
-#                     category_inst=category_inst.copy_shallow(),
-#                     variable_insts=[var_inst.copy_shallow() for var_inst in variable_insts],
-#                     **self.get_plot_parameters(),
-#                 )
-#                 # save the plot
-#                 for outp in self.output()["plots"]:
-#                     outp.dump(fig, formatter="mpl")
-#         else:
-#             self.publish_step(f"Category: {category_inst.name} isn't used to estimate QCD, skipping this task.")
-
-
-# class DataDrivenEstimationSingleShift(
-#     DataDrivenEstimationBase,
-#     ShiftTask,
-# ):
-#     exclude_index = True
-
-#     # upstream requirements
-#     reqs = Requirements(
-#         DataDrivenEstimationBase.reqs,
-#         MergeHistograms=MergeHistograms,
-#     )
-
-#     def create_branch_map(self):
-#         return [
-#             DotDict({"category": cat_name, "variable": var_name})
-#             for var_name in sorted(self.variables)
-#             for cat_name in sorted(self.categories)
-#         ]
-
-#     def requires(self):
-#         return {
-#             d: self.reqs.MergeHistograms.req(
-#                 self,
-#                 dataset=d,
-#                 branch=-1,
-#                 _exclude={"branches"},
-#                 _prefer_cli={"variables"},
-#             )
-#             for d in self.datasets
-#         }
-
-#     def output(self):
-#         b = self.branch_data
-#         return {"plots": [
-#             self.target(name)
-#             for name in self.get_plot_names(f"plot__proc_{self.processes_repr}__cat_{b.category}__var_{b.variable}")
-#         ],
-#         "qcd_hists": law.SiblingFileCollection({
-#             variable_name: self.target(f"qcd_histogram__{b.category}_{variable_name}.pickle")
-#             for variable_name in self.variables
-#         })}
-
-#     def get_plot_shifts(self):
-#         return [self.global_shift_inst]
-
-
-# class DataDrivenEstimation(
-#     DataDrivenEstimationSingleShift,
-#     DataDrivenEstimationBase,
-# ):
-#     plot_function = PlotBase.plot_function.copy(
-#         default="columnflow.plotting.plot_functions_1d.plot_variable_per_process",
-#         add_default_to_description=True,
-#     )
-    
-    
-    
-
-# coding: utf-8
 
 """
 Task to produce and merge histograms.
@@ -262,14 +11,16 @@ import law
 from columnflow.tasks.framework.base import Requirements, AnalysisTask, DatasetTask, wrapper_factory
 from columnflow.tasks.framework.mixins import (
     CalibratorsMixin, SelectorStepsMixin, ProducersMixin, MLModelsMixin, VariablesMixin,
-    ShiftSourcesMixin, WeightProducerMixin, ChunkedIOMixin,
+    ShiftSourcesMixin, WeightProducerMixin, ChunkedIOMixin, DatasetsProcessesMixin, CategoriesMixin
 )
+from columnflow.tasks.framework.plotting import ProcessPlotSettingMixin
+
 from columnflow.tasks.framework.remote import RemoteWorkflow
 from columnflow.tasks.framework.parameters import last_edge_inclusive_inst
 from columnflow.tasks.reduction import ReducedEventsUser
 from columnflow.tasks.production import ProduceColumns
 from columnflow.tasks.ml import MLEvaluation
-from columnflow.util import dev_sandbox
+from columnflow.util import dev_sandbox, DotDict
 
 
 class CreateFakeFactorHistograms(
@@ -355,7 +106,7 @@ class CreateFakeFactorHistograms(
         import numpy as np
         import awkward as ak
         from columnflow.columnar_util import (
-            Route, update_ak_array, add_ak_aliases, has_ak_column, fill_hist,
+            Route, update_ak_array, add_ak_aliases, has_ak_column, fill_hist, EMPTY_FLOAT
         )
 
         # prepare inputs
@@ -381,9 +132,8 @@ class CreateFakeFactorHistograms(
         read_columns |= set(self.weight_producer_inst.used_columns)
         read_columns |= set(map(Route, aliases.values()))
         read_columns |= {
-            Route(the_var) for the_var in self.config_inst.x.fake_factor_method.vars.keys()
+            Route(the_ax.var_route) for the_ax in self.config_inst.x.fake_factor_method.axes.values()
         }
-        from IPython import embed; embed()
         # empty float array to use when input files have no entries
         empty_f32 = ak.Array(np.array([], dtype=np.float32))
 
@@ -429,10 +179,10 @@ class CreateFakeFactorHistograms(
                     .IntCat([], name="category", growth=True)
                     .IntCat([], name="process", growth=True)
                     .IntCat([], name="shift", growth=True))
-                for (var_name, var_axis) in self.config_inst.x.fake_factor_method.vars.items(): 
-                    h = eval(f'h.{var_axis}') 
+                for (var_name, var_axis) in self.config_inst.x.fake_factor_method.axes.items(): 
+                    h = eval(f'h.{var_axis.ax_str}') 
                 
-                histograms['fake_factor'] = h.Weight()
+                histograms['fake_factors'] = h.Weight()
                 
                 category_ids = ak.concatenate(
                         [Route(c).apply(events) for c in self.category_id_columns],
@@ -440,75 +190,24 @@ class CreateFakeFactorHistograms(
                     )
                 # broadcast arrays so that each event can be filled for all its categories
                 fill_data = {
-                    "category": category_ids,
-                    "process": events.process_id,
-                    "shift": np.ones(len(events), dtype=np.int32) * self.global_shift_inst.id,
+                    "category"          : category_ids,
+                    "process"           : events.process_id,
+                    "shift"             : np.ones(len(events), dtype=np.int32) * self.global_shift_inst.id,
                     "weight": weight,
                 }
-                # for variable_inst in self.config_inst.x.fake_factor_method.vars.:
-                #     # prepare the expression
-                #     expr = variable_inst.expression
-                #     if isinstance(expr, str):
-                #         route = Route(expr)
-                #         def expr(events, *args, **kwargs):
-                #             if len(events) == 0 and not has_ak_column(events, route):
-                #                 return empty_f32
-                #             return route.apply(events, null_value=variable_inst.null_value)
-                #     fill_data[variable_inst.name] = expr(events)
-                from IPython import embed; embed()
-                # for var_key, var_names in self.variable_tuples.items():
-                #     variable_insts = [self.config_inst.get_variable(var_name) for var_name in var_names]
-
-                #     # create the histogram if not present yet
-                #     if var_key not in histograms:
-                #         h = (
-                #             hist.Hist.new
-                #             .IntCat([], name="category", growth=True)
-                #             .IntCat([], name="process", growth=True)
-                #             .IntCat([], name="shift", growth=True)
-                #         )
-                #         # add variable axes
-                #         for variable_inst in variable_insts:
-                #             h = h.Var(
-                #                 variable_inst.bin_edges,
-                #                 name=variable_inst.name,
-                #                 label=variable_inst.get_full_x_title(),
-                #             )
-                #         # enable weights and store it
-                #         histograms[var_key] = h.Weight()
-
-                    # # merge category ids
-                    # category_ids = ak.concatenate(
-                    #     [Route(c).apply(events) for c in self.category_id_columns],
-                    #     axis=-1,
-                    # )
-
-                    # broadcast arrays so that each event can be filled for all its categories
-                    # fill_data = {
-                    #     "category": category_ids,
-                    #     "process": events.process_id,
-                    #     "shift": np.ones(len(events), dtype=np.int32) * self.global_shift_inst.id,
-                    #     "weight": weight,
-                    # }
-                    # for variable_inst in variable_insts:
-                    #     # prepare the expression
-                    #     expr = variable_inst.expression
-                    #     if isinstance(expr, str):
-                    #         route = Route(expr)
-                    #         def expr(events, *args, **kwargs):
-                    #             if len(events) == 0 and not has_ak_column(events, route):
-                    #                 return empty_f32
-                    #             return route.apply(events, null_value=variable_inst.null_value)
-                    #     # apply it
-                    #     fill_data[variable_inst.name] = expr(events)
-
-                    # # fill it
-                    # fill_hist(
-                    #     histograms[var_key],
-                    #     fill_data,
-                    #     last_edge_inclusive=self.last_edge_inclusive,
-                    # )
-
+                for (var_name, var_axis) in self.config_inst.x.fake_factor_method.axes.items(): 
+                    route = Route(var_axis.var_route)
+                    if len(events) == 0 and not has_ak_column(events, route):
+                        values = empty_f32
+                    else:
+                        values = ak.fill_none(ak.firsts(route.apply(events),axis=1), EMPTY_FLOAT)
+                        if 'IntCategory' in var_axis.ax_str: values = ak.values_astype(values, np.int64)
+                    fill_data[var_name] = values
+                # fill it
+                fill_hist(
+                    histograms['fake_factors'],
+                    fill_data,
+                )
         # merge output files
         self.output()["hists"].dump(histograms, formatter="pickle")
 
@@ -527,205 +226,149 @@ CreateFakeFactorHistogramsWrapper = wrapper_factory(
     enable=["configs", "skip_configs", "datasets", "skip_datasets", "shifts", "skip_shifts"],
 )
 
+class MergeFakeFactors(
+    VariablesMixin,
+    DatasetsProcessesMixin,
+    CategoriesMixin,
+    WeightProducerMixin,
+    ProducersMixin,
+    SelectorStepsMixin,
+    CalibratorsMixin,
+    law.LocalWorkflow,
+    RemoteWorkflow,
+):
+    sandbox = dev_sandbox(law.config.get("analysis", "default_columnar_sandbox"))
 
-# class MergeHistograms(
-#     VariablesMixin,
-#     WeightProducerMixin,
-#     MLModelsMixin,
-#     ProducersMixin,
-#     SelectorStepsMixin,
-#     CalibratorsMixin,
-#     DatasetTask,
-#     law.LocalWorkflow,
-#     RemoteWorkflow,
-# ):
-#     only_missing = luigi.BoolParameter(
-#         default=False,
-#         description="when True, identify missing variables first and only require histograms of "
-#         "missing ones; default: False",
-#     )
-#     remove_previous = luigi.BoolParameter(
-#         default=False,
-#         significant=False,
-#         description="when True, remove particlar input histograms after merging; default: False",
-#     )
+    only_missing = luigi.BoolParameter(
+        default=False,
+        description="when True, identify missing variables first and only require histograms of "
+        "missing ones; default: False",
+    )
+    remove_previous = luigi.BoolParameter(
+        default=False,
+        significant=False,
+        description="when True, remove particlar input histograms after merging; default: False",
+    )
+    
+    # upstream requirements
+    reqs = Requirements(
+        RemoteWorkflow.reqs,
+        CreateFakeFactorHistograms=CreateFakeFactorHistograms,
+    )
+    
+    def store_parts(self):
+        parts = super().store_parts()
+        parts.insert_before("version", "datasets" )#, f"datasets_{self.datasets_repr}")
+        return parts
+    
+    @classmethod
+    def req_params(cls, inst: AnalysisTask, **kwargs) -> dict:
+        _prefer_cli = law.util.make_set(kwargs.get("_prefer_cli", [])) | {"variables"}
+        kwargs["_prefer_cli"] = _prefer_cli
+        return super().req_params(inst, **kwargs)
 
-#     sandbox = dev_sandbox(law.config.get("analysis", "default_columnar_sandbox"))
+    def create_branch_map(self):
+        return [
+            DotDict({"category": cat_name})
+            for cat_name in sorted(self.categories)
+        ]
 
-#     # upstream requirements
-#     reqs = Requirements(
-#         RemoteWorkflow.reqs,
-#         CreateHistograms=CreateHistograms,
-#     )
+    def _get_variables(self):
+        if self.is_workflow():
+            return self.as_branch()._get_variables()
 
-#     @classmethod
-#     def req_params(cls, inst: AnalysisTask, **kwargs) -> dict:
-#         _prefer_cli = law.util.make_set(kwargs.get("_prefer_cli", [])) | {"variables"}
-#         kwargs["_prefer_cli"] = _prefer_cli
-#         return super().req_params(inst, **kwargs)
+        variables = self.variables
 
-#     def create_branch_map(self):
-#         # create a dummy branch map so that this task could be submitted as a job
-#         return {0: None}
+        # optional dynamic behavior: determine not yet created variables and require only those
+        if self.only_missing:
+            missing = self.output().count(existing=False, keys=True)[1]
+            variables = sorted(missing, key=variables.index)
 
-#     def _get_variables(self):
-#         if self.is_workflow():
-#             return self.as_branch()._get_variables()
+        return variables
 
-#         variables = self.variables
+    def workflow_requires(self):
+        reqs = super().workflow_requires()
+        if not self.pilot:
+            variables = self._get_variables()
+            if variables:
+                reqs["ff_method"] = self.reqs.CreateFakeFactorHistograms.req_different_branching(
+                    self,
+                    branch=-1,
+                    variables=tuple(variables),
+                )
 
-#         # optional dynamic behavior: determine not yet created variables and require only those
-#         if self.only_missing:
-#             missing = self.output().count(existing=False, keys=True)[1]
-#             variables = sorted(missing, key=variables.index)
+        return reqs
 
-#         return variables
+    def requires(self):
+        return {
+            d: self.reqs.CreateFakeFactorHistograms.req(
+                self,
+                dataset=d,
+                branch=-1,
+            )
+            for d in self.datasets
+        }
+    def output(self):
+        return {"hists": self.target(f"fake_factors.pickle")}
 
-#     def workflow_requires(self):
-#         reqs = super().workflow_requires()
+    @law.decorator.log
+    def run(self):
+        import hist
+        import numpy as np
+        import matplotlib.pyplot as plt
+        # preare inputs and outputs
+        inputs = self.input()
+        outputs = self.output()
+        merged_per_dataset = {}
+        projected_hists = []
+        for (dataset_name, dataset) in inputs.items():
+            files = dataset['collection']
+            # load input histograms per dataset
+            hists = [
+                inp['hists'].load(formatter="pickle")['fake_factors']
+                for inp in self.iter_progress(files.targets.values(), len(files), reach=(0, 50))
+            ]
+            self.publish_message(f"merging Fake factor histograms for {dataset_name}")
+            the_hist = sum(hists[1:], hists[0].copy())
+            merged_per_dataset[dataset_name] = the_hist
+            #Get axes names excluding 'process'. This is needed to merge hists for different processes
+            ax_names = [ax_name for ax_name in the_hist.axes.name if ax_name != 'process']
+            #Remove 'process' axis by projecting hist on the remaining axes
+            projected_hists.append(the_hist.project(*ax_names))
+        merged_hist = sum(projected_hists[1:], projected_hists[0].copy())
+        
+        cat_SR = self.config_inst.get_category(self.branch_data.category)
+        cat_DR_den = self.config_inst.get_category(cat_SR.x.DR_den)
+        cat_DR_num = self.config_inst.get_category(cat_SR.x.DR_num)
+        
+        def get_hist (h, category): 
+            return h[{"category": hist.loc(category.id)}]
+        
+        h_DR_num = get_hist(merged_hist,cat_DR_num).values()
+        h_DR_den = get_hist(merged_hist,cat_DR_den).values()
+        
+        ff_values = np.where((h_DR_num > 0) & (h_DR_den > 0),
+                             h_DR_num / np.maximum(h_DR_den, 1),
+                             0.0,
+        )
+        
+        #For the control: make 2d hists and plot them:
+        hist2d = merged_hist.project('tau_pt','tau_dm_pnet')
+        ff_hist = hist.Hist(*hist2d.axes, data=ff_values[0])
+        fig, ax = plt.subplots(figsize=(12, 8))
+        ff_hist.plot2d(ax=ax)
+        plt.savefig('fake_factors.pdf')
+        from IPython import embed; embed()
+        #outputs["hists"][variable_name].dump(merged, formatter="pickle")F
 
-#         if not self.pilot:
-#             variables = self._get_variables()
-#             if variables:
-#                 reqs["hists"] = self.reqs.CreateHistograms.req_different_branching(
-#                     self,
-#                     branch=-1,
-#                     variables=tuple(variables),
-#                 )
-
-#         return reqs
-
-#     def requires(self):
-#         variables = self._get_variables()
-#         if not variables:
-#             return []
-
-#         return self.reqs.CreateHistograms.req_different_branching(
-#             self,
-#             branch=-1,
-#             variables=tuple(variables),
-#             workflow="local",
-#         )
-
-#     def output(self):
-#         return {"hists": law.SiblingFileCollection({
-#             variable_name: self.target(f"hist__{variable_name}.pickle")
-#             for variable_name in self.variables
-#         })}
-
-#     @law.decorator.log
-#     def run(self):
-#         # preare inputs and outputs
-#         inputs = self.input()["collection"]
-#         outputs = self.output()
-
-#         # load input histograms
-#         hists = [
-#             inp["hists"].load(formatter="pickle")
-#             for inp in self.iter_progress(inputs.targets.values(), len(inputs), reach=(0, 50))
-#         ]
-
-#         # create a separate file per output variable
-#         variable_names = list(hists[0].keys())
-#         for variable_name in self.iter_progress(variable_names, len(variable_names), reach=(50, 100)):
-#             self.publish_message(f"merging histograms for '{variable_name}'")
-
-#             variable_hists = [h[variable_name] for h in hists]
-#             merged = sum(variable_hists[1:], variable_hists[0].copy())
-#             outputs["hists"][variable_name].dump(merged, formatter="pickle")
-
-#         # optionally remove inputs
-#         if self.remove_previous:
-#             inputs.remove()
+        # optionally remove inputs
+        if self.remove_previous:
+            inputs.remove()
 
 
-# MergeHistogramsWrapper = wrapper_factory(
+# MergeFakeFactorsWrapper = wrapper_factory(
 #     base_cls=AnalysisTask,
-#     require_cls=MergeHistograms,
+#     require_cls=MergeFakeFactors,
 #     enable=["configs", "skip_configs", "datasets", "skip_datasets", "shifts", "skip_shifts"],
 # )
 
-
-# class MergeShiftedHistograms(
-#     VariablesMixin,
-#     ShiftSourcesMixin,
-#     WeightProducerMixin,
-#     MLModelsMixin,
-#     ProducersMixin,
-#     SelectorStepsMixin,
-#     CalibratorsMixin,
-#     DatasetTask,
-#     law.LocalWorkflow,
-#     RemoteWorkflow,
-# ):
-#     sandbox = dev_sandbox(law.config.get("analysis", "default_columnar_sandbox"))
-
-#     # disable the shift parameter
-#     shift = None
-#     effective_shift = None
-#     allow_empty_shift = True
-
-#     # allow only running on nominal
-#     allow_empty_shift_sources = True
-
-#     # upstream requirements
-#     reqs = Requirements(
-#         RemoteWorkflow.reqs,
-#         MergeHistograms=MergeHistograms,
-#     )
-
-#     def create_branch_map(self):
-#         # create a dummy branch map so that this task could as a job
-#         return {0: None}
-
-#     def workflow_requires(self):
-#         reqs = super().workflow_requires()
-
-#         # add nominal and both directions per shift source
-#         for shift in ["nominal"] + self.shifts:
-#             reqs[shift] = self.reqs.MergeHistograms.req(self, shift=shift, _prefer_cli={"variables"})
-
-#         return reqs
-
-#     def requires(self):
-#         return {
-#             shift: self.reqs.MergeHistograms.req(self, shift=shift, _prefer_cli={"variables"})
-#             for shift in ["nominal"] + self.shifts
-#         }
-
-#     def store_parts(self):
-#         parts = super().store_parts()
-#         parts.insert_after("dataset", "shift_sources", f"shifts_{self.shift_sources_repr}")
-#         return parts
-
-#     def output(self):
-#         return {"hists": law.SiblingFileCollection({
-#             variable_name: self.target(f"shifted_hist__{variable_name}.pickle")
-#             for variable_name in self.variables
-#         })}
-
-#     @law.decorator.log
-#     def run(self):
-#         # preare inputs and outputs
-#         inputs = self.input()
-#         outputs = self.output()["hists"].targets
-
-#         for variable_name, outp in self.iter_progress(outputs.items(), len(outputs)):
-#             self.publish_message(f"merging histograms for '{variable_name}'")
-
-#             # load hists
-#             variable_hists = [
-#                 coll["hists"].targets[variable_name].load(formatter="pickle")
-#                 for coll in inputs.values()
-#             ]
-
-#             # merge and write the output
-#             merged = sum(variable_hists[1:], variable_hists[0].copy())
-#             outp.dump(merged, formatter="pickle")
-
-
-# MergeShiftedHistogramsWrapper = wrapper_factory(
-#     base_cls=AnalysisTask,
-#     require_cls=MergeShiftedHistograms,
-#     enable=["configs", "skip_configs", "datasets", "skip_datasets"],
-# )
