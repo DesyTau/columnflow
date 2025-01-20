@@ -72,7 +72,8 @@ def plot_variable_per_process(
     total_events = {key: sum(hist.values()) for key, hist in hists.items()}
 
     # Sort processes by total number of events in descending order
-    sorted_hists_desc = OrderedDict(sorted(hists.items(), key=lambda item: total_events[item[0]], reverse=True))
+    #sorted_hists_desc = OrderedDict(sorted(hists.items(), key=lambda item: total_events[item[0]], reverse=True))
+    sorted_hists_desc = OrderedDict(hists.items())
 
     # Get keys of sorted processes
     sorted_keys = list(sorted_hists_desc.keys())
@@ -86,7 +87,7 @@ def plot_variable_per_process(
         custom_order = sorted_keys
     else:
         # More than two processes, custom order: highest, rest, then second highest
-        custom_order = [sorted_keys[0]] + sorted_keys[2:] + [sorted_keys[1]]
+        custom_order = sorted_keys #[sorted_keys[0]] + sorted_keys[2:] + [sorted_keys[1]]
 
     # Reorder histograms based on custom order
     sorted_hists = OrderedDict((key, sorted_hists_desc[key]) for key in custom_order)
