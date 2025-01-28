@@ -309,7 +309,9 @@ class ComputeFakeFactors(
         }
     def output(self):
         return {"ff_json": {ff_type: self.target(f"fake_factors_{ff_type}.json")for ff_type in ['qcd','wj']},
-                "plots": {syst: self.target(f"fake_factor_syst_{syst}.png") for syst in ['nominal', 'up', 'down']},}
+                "plots": {'_'.join((ff_type, syst)): self.target(f"fake_factor_{ff_type}_{syst}.png")
+                          for syst in ['nominal', 'up', 'down']
+                          for ff_type in ['qcd','wj']},}
 
     @law.decorator.log
     def run(self):
@@ -333,7 +335,7 @@ class ComputeFakeFactors(
             self.publish_message(f"merging Fake factor histograms for {dataset_name}")
             ds_single_hist = sum(hists_per_ds[1:], hists_per_ds[0].copy())
             hists_by_dataset.append(ds_single_hist)
-        
+        #Create a dict of histograms indexed by the process
         hists_by_proc = {}
         for proc_name in self.config_inst.processes.names():
             proc = self.config_inst.processes.get(proc_name)
@@ -349,40 +351,39 @@ class ComputeFakeFactors(
                     else:
                         hists_by_proc[proc] = h
         
+        #Divide histograms to data and bkg
         mc_hists    = [h for p, h in hists_by_proc.items() if p.is_mc and not p.has_tag("signal")]
         data_hists  = [h for p, h in hists_by_proc.items() if p.is_data]
         
+        #Merge histograms to get a joint data and mc histogram
         mc_hists    = sum(mc_hists[1:], mc_hists[0].copy())
         data_hists  = sum(data_hists[1:], data_hists[0].copy())
         
-        dr_names = ['dr_num_wj','dr_den_wj','dr_num_qcd','dr_den_qcd']
-        
-        def get_hist(h, category): 
-             return h[{"category": hist.loc(category.id)}]
-        
-        
-        #Create two dictionaries that contain histograms for different determination regions
-        data_h_cat ={}
-        mc_h_cat = {}
-        for dr_name in dr_names:
-            cat = self.config_inst.get_category(self.branch_data.category.replace('sr',dr_name))
-            data_h_cat[dr_name]  = get_hist(data_hists, cat)
-            mc_h_cat[dr_name]    = get_hist(mc_hists, cat)
+        #Function that performs the calculation of th
+        def get_ff_corr(self, h_data, h_mc, num_reg = 'dr_num_wj', den_reg = 'dr_den_wj', name='ff_hist', label='ff_hist'):
             
-        
-        def get_ff_corr(self, h_data, h_mc, num_cat, den_cat, name='ff_hist', label='ff_hist'):
-            num = h_data[num_cat].values() - h_mc[num_cat].values()
-            den = h_data[den_cat].values() - h_mc[den_cat].values()
+            def get_dr_hist(self, h, det_reg): 
+                cat = self.config_inst.get_category(self.branch_data.category.replace('sr',det_reg))
+                return h[{"category": hist.loc(cat.id)}]
+         
+            data_num = get_dr_hist(self, h_data, num_reg)
+            data_den = get_dr_hist(self, h_data, den_reg)
+            mc_num = get_dr_hist(self, h_mc, num_reg)
+            mc_den = get_dr_hist(self, h_mc, den_reg)
+            
+            num = data_num.values() - mc_num.values()
+            den = data_den.values() - mc_den.values()
             ff_val = np.where((num > 0) & (den > 0),
                                num / np.maximum(den, 1),
                                1)
             def rel_err(x):
                 return x.variances()/np.maximum(x.values()**2, 1)
+            
             ff_err2 = np.where((num > 0) & (den > 0),
-                               np.sqrt(rel_err(h_data[num_cat]) + 
-                                       + rel_err(h_mc[den_cat]) +
-                                       + rel_err(h_data[num_cat]) + 
-                                       + rel_err(h_mc[den_cat])) * ff_val**2,
+                               np.sqrt(rel_err(data_num) + 
+                                       + rel_err(data_den) +
+                                       + rel_err(mc_num) + 
+                                       + rel_err(mc_den)) * ff_val**2,
                                0.5* np.ones_like(ff_val))
             h = hist.Hist.new
             for (var_name, var_axis) in self.config_inst.x.fake_factor_method.axes.items(): 
@@ -394,25 +395,23 @@ class ComputeFakeFactors(
             ff_hist.view().value[...,2] = np.maximum(ff_val - np.sqrt(ff_err2),0)
             ff_hist.name = name
             ff_hist.label = label
-            ff_corr = cl_convert.from_histogram(ff_hist) #temporary correction without systematic axis
+            ff_corr = cl_convert.from_histogram(ff_hist)
             ff_corr.data.flow = "clamp"
             return ff_corr, ff_hist
         
-        import rich
-        
         wj_corr, wj_h = get_ff_corr(self,
-                              data_h_cat,
-                              mc_h_cat,
-                              num_cat = 'dr_num_wj',
-                              den_cat = 'dr_den_wj',
+                              data_hists,
+                              mc_hists,
+                              num_reg = 'dr_num_wj',
+                              den_reg = 'dr_den_wj',
                               name='ff_wjets',
                               label='Fake factor W+jets')
         
         qcd_corr, qcd_h = get_ff_corr(self,
-                              data_h_cat,
-                              mc_h_cat,
-                              num_cat = 'dr_num_qcd',
-                              den_cat = 'dr_den_qcd',
+                              data_hists,
+                              mc_hists,
+                              num_reg = 'dr_num_qcd',
+                              den_reg = 'dr_den_qcd',
                               name='ff_qcd',
                               label='Fake factor QCD')
         
@@ -422,9 +421,8 @@ class ComputeFakeFactors(
             for syst in ['nominal','up','down']:
                 fig, ax = plt.subplots(figsize=(12, 8))
                 the_hist[...,syst].plot2d(ax=ax)
-                self.output()['plots'][syst].dump(fig, formatter="mpl")
+                self.output()['plots']['_'.join((h_name,syst))].dump(fig, formatter="mpl")
                 
-            
         self.output()['ff_json']['wj'].dump(wj_corr.json(exclude_unset=True), formatter="json")
         self.output()['ff_json']['qcd'].dump(qcd_corr.json(exclude_unset=True), formatter="json")
             
