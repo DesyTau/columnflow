@@ -174,9 +174,9 @@ class PrepareFakeFactorHistograms(
                 else:
                     weight = ak.Array(np.ones(len(events), dtype=np.float32))
                 # define and fill histograms, taking into account multiple axes
-                
+                categories = self.config_inst.categories.ids()
                 h = (hist.Hist.new
-                    .IntCat([], name="category", growth=True)
+                    .IntCat(categories , name="category", growth=True)
                     .IntCat([], name="process", growth=True))
                 for (var_name, var_axis) in self.config_inst.x.fake_factor_method.axes.items(): 
                     h = eval(f'h.{var_axis.ax_str}') 
@@ -231,10 +231,6 @@ class ComputeFakeFactors(
     CategoriesMixin,
     WeightProducerMixin,
     ProducersMixin,
-    SelectorStepsMixin,
-    CalibratorsMixin,
-    law.LocalWorkflow,
-    RemoteWorkflow,
 ):
     sandbox = dev_sandbox(law.config.get("analysis", "default_columnar_sandbox"))
 
@@ -265,25 +261,6 @@ class ComputeFakeFactors(
         _prefer_cli = law.util.make_set(kwargs.get("_prefer_cli", [])) | {"variables"}
         kwargs["_prefer_cli"] = _prefer_cli
         return super().req_params(inst, **kwargs)
-
-    def create_branch_map(self):
-        return [
-            DotDict({"category": cat_name})
-            for cat_name in sorted(self.categories)
-        ]
-
-    def _get_variables(self):
-        if self.is_workflow():
-            return self.as_branch()._get_variables()
-
-        variables = self.variables
-
-        # optional dynamic behavior: determine not yet created variables and require only those
-        if self.only_missing:
-            missing = self.output().count(existing=False, keys=True)[1]
-            variables = sorted(missing, key=variables.index)
-
-        return variables
 
     def workflow_requires(self):
         reqs = super().workflow_requires()
@@ -356,14 +333,15 @@ class ComputeFakeFactors(
         data_hists  = [h for p, h in hists_by_proc.items() if p.is_data]
         
         #Merge histograms to get a joint data and mc histogram
-        mc_hists    = sum(mc_hists[1:], mc_hists[0].copy())
-        data_hists  = sum(data_hists[1:], data_hists[0].copy())
+        if len(mc_hists) > 1:   mc_hists    = sum(mc_hists[1:], mc_hists[0].copy())
+        if len(data_hists) > 1: data_hists  = sum(data_hists[1:], data_hists[0].copy())
         
         #Function that performs the calculation of th
         def get_ff_corr(self, h_data, h_mc, num_reg = 'dr_num_wj', den_reg = 'dr_den_wj', name='ff_hist', label='ff_hist'):
-            
             def get_dr_hist(self, h, det_reg): 
-                cat = self.config_inst.get_category(self.branch_data.category.replace('sr',det_reg))
+                cat_name = self.categories[0]
+                from IPython import embed; embed()
+                cat = self.config_inst.get_category(cat_name.replace('sr',det_reg))
                 return h[{"category": hist.loc(cat.id)}]
          
             data_num = get_dr_hist(self, h_data, num_reg)
@@ -425,14 +403,212 @@ class ComputeFakeFactors(
                 
         self.output()['ff_json']['wj'].dump(wj_corr.json(exclude_unset=True), formatter="json")
         self.output()['ff_json']['qcd'].dump(qcd_corr.json(exclude_unset=True), formatter="json")
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
+
+
+
+class CreateDataDrivenHistograms(
+    VariablesMixin,
+    WeightProducerMixin,
+    ProducersMixin,
+    ReducedEventsUser,
+    ChunkedIOMixin,
+    law.LocalWorkflow,
+    RemoteWorkflow,
+):
+
+    sandbox = dev_sandbox(law.config.get("analysis", "default_columnar_sandbox"))
+
+    # upstream requirements
+    reqs = Requirements(
+        ReducedEventsUser.reqs,
+        RemoteWorkflow.reqs,
+        ComputeFakeFactors=ComputeFakeFactors,
+        ProduceColumns=ProduceColumns,
+    )
+    
+    def requires(self):
+        reqs = {"events": self.reqs.ProvideReducedEvents.req(self)}
+        from IPython import embed; embed()
+        if self.producer_insts:
+            reqs["producers"] = [
+                self.reqs.ProduceColumns.req(self, producer=producer_inst.cls_name)
+                for producer_inst in self.producer_insts
+                if producer_inst.produced_columns
+            ]
+        reqs['ff_json'] = self.reqs.ComputeFakeFactors.req(self)
+        reqs["weight_producer"] = law.util.make_unique(law.util.flatten(self.weight_producer_inst.run_requires()))
+        return reqs
+
+    def output(self):
+        return {"hists": self.target(f"histograms__vars_{self.variables_repr}__{self.branch}.pickle")}
+
+    @law.decorator.log
+    @law.decorator.localize(input=True, output=False)
+    @law.decorator.safe_output
+    def run(self):
+        import hist
+        import numpy as np
+        import awkward as ak
+        from columnflow.columnar_util import (
+            Route, update_ak_array, add_ak_aliases, has_ak_column, fill_hist,
+        )
+
+        # prepare inputs
+        inputs = self.input()
+        from IPython import embed; embed()
+        # declare output: dict of histograms
+        histograms = {}
+
+#         # run the weight_producer setup
+#         producer_reqs = self.weight_producer_inst.run_requires()
+#         reader_targets = self.weight_producer_inst.run_setup(producer_reqs, luigi.task.getpaths(producer_reqs))
+
+#         # create a temp dir for saving intermediate files
+#         tmp_dir = law.LocalDirectoryTarget(is_tmp=True)
+#         tmp_dir.touch()
+
+#         # get shift dependent aliases
+#         aliases = self.local_shift_inst.x("column_aliases", {})
+
+#         # define columns that need to be read
+#         read_columns = {Route("process_id")}
+#         read_columns |= set(map(Route, self.category_id_columns))
+#         read_columns |= set(self.weight_producer_inst.used_columns)
+#         read_columns |= set(map(Route, aliases.values()))
+#         read_columns |= {
+#             Route(inp)
+#             for variable_inst in (
+#                 self.config_inst.get_variable(var_name)
+#                 for var_name in law.util.flatten(self.variable_tuples.values())
+#             )
+#             for inp in ((
+#                 {variable_inst.expression}
+#                 if isinstance(variable_inst.expression, str)
+#                 # for variable_inst with custom expressions, read columns declared via aux key
+#                 else set(variable_inst.x("inputs", []))
+#             ) | (
+#                 # for variable_inst with selection, read columns declared via aux key
+#                 set(variable_inst.x("inputs", []))
+#                 if variable_inst.selection != "1"
+#                 else set()
+#             ))
+#         }
+
+#         # empty float array to use when input files have no entries
+#         empty_f32 = ak.Array(np.array([], dtype=np.float32))
+
+#         # iterate over chunks of events and diffs
+#         file_targets = [inputs["events"]["events"]]
+#         if self.producer_insts:
+#             file_targets.extend([inp["columns"] for inp in inputs["producers"]])
+#         # if self.ml_model_insts:
+#         #     file_targets.extend([inp["mlcolumns"] for inp in inputs["ml"]])
+
+#         # prepare inputs for localization
+#         with law.localize_file_targets(
+#             [*file_targets, *reader_targets.values()],
+#             mode="r",
+#         ) as inps:
+#             for (events, *columns), pos in self.iter_chunked_io(
+#                 [inp.abspath for inp in inps],
+#                 source_type=len(file_targets) * ["awkward_parquet"] + [None] * len(reader_targets),
+#                 read_columns=(len(file_targets) + len(reader_targets)) * [read_columns],
+#                 chunk_size=self.weight_producer_inst.get_min_chunk_size(),
+#             ):
+#                 # optional check for overlapping inputs
+#                 if self.check_overlapping_inputs:
+#                     self.raise_if_overlapping([events] + list(columns))
+
+#                 # add additional columns
+#                 events = update_ak_array(events, *columns)
+
+#                 # add aliases
+#                 events = add_ak_aliases(
+#                     events,
+#                     aliases,
+#                     remove_src=True,
+#                     missing_strategy=self.missing_column_alias_strategy,
+#                 )
+
+#                 # build the full event weight without fake factors
+#                 if hasattr(self.weight_producer_inst, "skip_func") and not self.weight_producer_inst.skip_func():
+#                     events, weight = self.weight_producer_inst(events)
+#                 else:
+#                     weight = ak.Array(np.ones(len(events), dtype=np.float32))
+
+#                 # define and fill histograms, taking into account multiple axes
+#                 for var_key, var_names in self.variable_tuples.items():
+#                     # get variable instances
+#                     variable_insts = [self.config_inst.get_variable(var_name) for var_name in var_names]
+
+                    
+#                     # create the histogram if not present yet
+#                     if var_key not in histograms:
+#                         for reg_key in ['ar_wj','ar_wj','ar_yields']:
+#                             h = (
+#                                 hist.Hist.new
+#                                 .IntCat([], name="process", growth=True)
+#                                 .IntCat([], name="shift", growth=True)
+#                             )
+#                             # add variable axes
+#                             for variable_inst in variable_insts:
+#                                 h = h.Var(
+#                                     variable_inst.bin_edges,
+#                                     name='_'.join((variable_inst.name, reg_key))
+#                                     label=variable_inst.get_full_x_title(),
+#                                 )
+#                             # enable weights and store it
+#                             histograms[var_key] = h.Weight()
+                            
+#                     # merge category ids
+#                     category_ids = ak.concatenate(
+#                         [Route(c).apply(events) for c in self.category_id_columns],
+#                         axis=-1,
+#                     )
+
+#                     # broadcast arrays so that each event can be filled for all its categories
+#                     fill_data = {
+#                         "category": category_ids,
+#                         "process": events.process_id,
+#                         "shift": np.ones(len(events), dtype=np.int32) * self.global_shift_inst.id,
+#                         "weight": weight,
+#                     }
+#                     for variable_inst in variable_insts:
+#                         # prepare the expression
+#                         expr = variable_inst.expression
+#                         if isinstance(expr, str):
+#                             route = Route(expr)
+#                             def expr(events, *args, **kwargs):
+#                                 if len(events) == 0 and not has_ak_column(events, route):
+#                                     return empty_f32
+#                                 return route.apply(events, null_value=variable_inst.null_value)
+#                         # apply it
+#                         fill_data[variable_inst.name] = expr(masked_events)
+
+#                     # fill it
+#                     fill_hist(
+#                         histograms[var_key],
+#                         fill_data,
+#                         last_edge_inclusive=self.last_edge_inclusive,
+#                     )
+
+#         # merge output files
+#         self.output()["hists"].dump(histograms, formatter="pickle")
+
+
+# # overwrite class defaults
+# check_overlap_tasks = law.config.get_expanded("analysis", "check_overlapping_inputs", [], split_csv=True)
+# CreateHistograms.check_overlapping_inputs = ChunkedIOMixin.check_overlapping_inputs.copy(
+#     default=CreateHistograms.task_family in check_overlap_tasks,
+#     add_default_to_description=True,
+# )
+
+
+# CreateHistogramsWrapper = wrapper_factory(
+#     base_cls=AnalysisTask,
+#     require_cls=CreateHistograms,
+#     enable=["configs", "skip_configs", "datasets", "skip_datasets", "shifts", "skip_shifts"],
+# )
+
+
 
