@@ -20,6 +20,7 @@ from columnflow.tasks.reduction import ReducedEventsUser
 from columnflow.tasks.production import ProduceColumns
 from columnflow.tasks.ml import MLEvaluation
 from columnflow.util import dev_sandbox
+from columnflow.hist_util import create_hist_from_variables
 
 
 class CreateHistograms(
@@ -107,18 +108,19 @@ class CreateHistograms(
 
     @workflow_condition.output
     def output(self):
-        return {"hists": self.target(f"histograms__vars_{self.variables_repr}__{self.branch}.pickle")}
+        return {"hists": self.target(f"hist__vars_{self.variables_repr}__{self.branch}.pickle")}
 
+    @law.decorator.notify
     @law.decorator.log
     @law.decorator.localize(input=True, output=False)
     @law.decorator.safe_output
     def run(self):
-        import hist
         import numpy as np
         import awkward as ak
         from columnflow.columnar_util import (
-            Route, update_ak_array, add_ak_aliases, has_ak_column, fill_hist,
+            Route, update_ak_array, add_ak_aliases, has_ak_column, attach_coffea_behavior,
         )
+        from columnflow.hist_util import fill_hist
 
         # prepare inputs
         inputs = self.input()
@@ -197,6 +199,9 @@ class CreateHistograms(
                     missing_strategy=self.missing_column_alias_strategy,
                 )
 
+                # attach coffea behavior aiding functional variable expressions
+                events = attach_coffea_behavior(events)
+
                 # build the full event weight
                 if hasattr(self.weight_producer_inst, "skip_func") and not self.weight_producer_inst.skip_func():
                     events, weight = self.weight_producer_inst(events)
@@ -208,23 +213,12 @@ class CreateHistograms(
                     # get variable instances
                     variable_insts = [self.config_inst.get_variable(var_name) for var_name in var_names]
 
-                    # create the histogram if not present yet
                     if var_key not in histograms:
-                        h = (
-                            hist.Hist.new
-                            .IntCat([], name="category", growth=True)
-                            .IntCat([], name="process", growth=True)
-                            .IntCat([], name="shift", growth=True)
+                        # create the histogram in the first chunk
+                        histograms[var_key] = create_hist_from_variables(
+                            *variable_insts,
+                            int_cat_axes=("category", "process", "shift"),
                         )
-                        # add variable axes
-                        for variable_inst in variable_insts:
-                            h = h.Var(
-                                variable_inst.bin_edges,
-                                name=variable_inst.name,
-                                label=variable_inst.get_full_x_title(),
-                            )
-                        # enable weights and store it
-                        histograms[var_key] = h.Weight()
 
                     # mask events and weights when selection expressions are found
                     masked_events = events
@@ -234,7 +228,9 @@ class CreateHistograms(
                         if sel == "1":
                             continue
                         if not callable(sel):
-                            raise ValueError(f"invalid selection '{sel}', for now only callables are supported")
+                            raise ValueError(
+                                f"invalid selection '{sel}', for now only callables are supported",
+                            )
                         mask = sel(masked_events)
                         masked_events = masked_events[mask]
                         masked_weights = masked_weights[mask]
@@ -309,7 +305,7 @@ class MergeHistograms(
     remove_previous = luigi.BoolParameter(
         default=False,
         significant=False,
-        description="when True, remove particlar input histograms after merging; default: False",
+        description="when True, remove particular input histograms after merging; default: False",
     )
 
     sandbox = dev_sandbox(law.config.get("analysis", "default_columnar_sandbox"))
@@ -338,7 +334,7 @@ class MergeHistograms(
 
         # optional dynamic behavior: determine not yet created variables and require only those
         if self.only_missing:
-            missing = self.output().count(existing=False, keys=True)[1]
+            missing = self.output()["hists"].count(existing=False, keys=True)[1]
             variables = sorted(missing, key=variables.index)
 
         return variables
@@ -371,10 +367,11 @@ class MergeHistograms(
 
     def output(self):
         return {"hists": law.SiblingFileCollection({
-            variable_name: self.target(f"hist__{variable_name}.pickle")
+            variable_name: self.target(f"hist__var_{variable_name}.pickle")
             for variable_name in self.variables
         })}
 
+    @law.decorator.notify
     @law.decorator.log
     def run(self):
         # preare inputs and outputs
@@ -455,7 +452,7 @@ class MergeShiftedHistograms(
             for shift in ["nominal"] + self.shifts
         }
 
-    def store_parts(self):
+    def store_parts(self) -> law.util.InsertableDict:
         parts = super().store_parts()
         parts.insert_after("dataset", "shift_sources", f"shifts_{self.shift_sources_repr}")
         return parts
@@ -466,6 +463,7 @@ class MergeShiftedHistograms(
             for variable_name in self.variables
         })}
 
+    @law.decorator.notify
     @law.decorator.log
     def run(self):
         # preare inputs and outputs
