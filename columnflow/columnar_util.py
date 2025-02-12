@@ -14,6 +14,7 @@ import re
 import math
 import time
 import enum
+
 import inspect
 import threading
 import multiprocessing
@@ -40,6 +41,7 @@ maybe_import("coffea.nanoevents")
 maybe_import("coffea.nanoevents.methods.base")
 maybe_import("coffea.nanoevents.methods.nanoaod")
 pq = maybe_import("pyarrow.parquet")
+hist = maybe_import("hist")
 
 
 # loggers
@@ -1405,15 +1407,15 @@ def fill_hist(
             flat_np_view(data[ax.name])[right_egde_mask] -= ax.widths[-1] * 1e-5
 
     # fill
-    # if 'event' in data.keys():
-    #     arrays = {}
-    #     for ax_name in axis_names:
-    #         if ax_name in data.keys():
-    #             arrays[ax_name] = data[ax_name]
-    #     h.fill(**fill_kwargs, **arrays)
-    # else:
-    arrays = ak.flatten(ak.cartesian(data))
-    h.fill(**fill_kwargs, **{field: arrays[field] for field in arrays.fields})
+    if 'event' in data.keys():
+        arrays = {}
+        for ax_name in axis_names:
+            if ax_name in data.keys():
+                arrays[ax_name] = data[ax_name]
+        h.fill(**fill_kwargs, **arrays)
+    else:
+        arrays = ak.flatten(ak.cartesian(data))
+        h.fill(**fill_kwargs, **{field: arrays[field] for field in arrays.fields})
 
 
 class RouteFilter(object):

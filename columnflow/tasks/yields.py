@@ -143,7 +143,7 @@ class CreateYieldTable(
                 dataset_inst = self.config_inst.get_dataset(dataset)
 
                 # load the histogram of the variable named "event"
-                h_in = inp["hists"]["event"].load(formatter="pickle")
+                input_hists = inp["hists"]["event"].load(formatter="pickle")
 
                 # loop and extract one histogram per process
                 for process_inst in process_insts:
