@@ -24,8 +24,8 @@ from columnflow.util import dev_sandbox, DotDict
 
 
 class PrepareFakeFactorHistograms(
-    VariablesMixin,
     WeightProducerMixin,
+    MLModelsMixin,
     ProducersMixin,
     ReducedEventsUser,
     ChunkedIOMixin,
@@ -226,7 +226,6 @@ PrepareFakeFactorHistogramsWrapper = wrapper_factory(
 )
 
 class ComputeFakeFactors(
-    VariablesMixin,
     DatasetsProcessesMixin,
     CategoriesMixin,
     WeightProducerMixin,
@@ -285,16 +284,21 @@ class ComputeFakeFactors(
             for d in self.datasets
         }
     def output(self):
-        return {"ff_json": {ff_type: self.target(f"fake_factors_{ff_type}.json")for ff_type in ['qcd','wj']},
+        return {"ff_json": self.target(f"fake_factors.json"),
                 "plots": {'_'.join((ff_type, syst)): self.target(f"fake_factor_{ff_type}_{syst}.png")
                           for syst in ['nominal', 'up', 'down']
-                          for ff_type in ['qcd','wj']},}
+                          for ff_type in ['qcd','wj']},
+                "plots1d": {'_'.join((ff_type,str(dm))): self.target(f"fake_factor_{ff_type}_PNet_dm_{str(dm)}.png")
+                          for ff_type in ['qcd','wj']
+                          for dm in [0,1,2,10,11]}}
 
     @law.decorator.log
     def run(self):
         import hist
         import numpy as np
+        from scipy.optimize import curve_fit
         import matplotlib.pyplot as plt
+        import correctionlib
         import correctionlib.convert as cl_convert 
         # preare inputs and outputs
         inputs = self.input()
@@ -309,14 +313,12 @@ class ComputeFakeFactors(
                 inp['hists'].load(formatter="pickle")['fake_factors']
                 for inp in self.iter_progress(files.targets.values(), len(files), reach=(0, 50))
             ]
-            self.publish_message(f"merging Fake factor histograms for {dataset_name}")
             ds_single_hist = sum(hists_per_ds[1:], hists_per_ds[0].copy())
             hists_by_dataset.append(ds_single_hist)
         #Create a dict of histograms indexed by the process
         hists_by_proc = {}
         for proc_name in self.config_inst.processes.names():
             proc = self.config_inst.processes.get(proc_name)
-            self.publish_message(f"merging Fake factor histograms for process: {proc.name}")
             for the_hist in hists_by_dataset:
                 
                 if proc.id in the_hist.axes["process"]: 
@@ -334,13 +336,14 @@ class ComputeFakeFactors(
         
         #Merge histograms to get a joint data and mc histogram
         if len(mc_hists) > 1:   mc_hists    = sum(mc_hists[1:], mc_hists[0].copy())
+        else: mc_hists = mc_hists[0].copy()
         if len(data_hists) > 1: data_hists  = sum(data_hists[1:], data_hists[0].copy())
+        else: data_hists = data_hists[0].copy()
         
         #Function that performs the calculation of th
         def get_ff_corr(self, h_data, h_mc, num_reg = 'dr_num_wj', den_reg = 'dr_den_wj', name='ff_hist', label='ff_hist'):
             def get_dr_hist(self, h, det_reg): 
                 cat_name = self.categories[0]
-                from IPython import embed; embed()
                 cat = self.config_inst.get_category(cat_name.replace('sr',det_reg))
                 return h[{"category": hist.loc(cat.id)}]
          
@@ -353,31 +356,54 @@ class ComputeFakeFactors(
             den = data_den.values() - mc_den.values()
             ff_val = np.where((num > 0) & (den > 0),
                                num / np.maximum(den, 1),
-                               1)
+                               -1)
             def rel_err(x):
                 return x.variances()/np.maximum(x.values()**2, 1)
             
-            ff_err2 = np.where((num > 0) & (den > 0),
-                               np.sqrt(rel_err(data_num) + 
-                                       + rel_err(data_den) +
-                                       + rel_err(mc_num) + 
-                                       + rel_err(mc_den)) * ff_val**2,
-                               0.5* np.ones_like(ff_val))
+            ff_err2 = np.abs(1./den) * (data_num.variances()**0.5 + mc_num.variances()**0.5) + np.abs(num)/(den**2) * (data_den.variances()**0.5 + mc_den.variances()**0.5)
+             
+            def fitf(x, a, b):
+                return a + b * x 
+            #make interpolation of the ff values
+            ipt_range = ff_val.shape[0]
+            x = data_num.axes[0].centers
+            
+            ff_fit = np.zeros((*np.shape(ff_val),3))
+            for idm in range(ff_val.shape[1]):
+                mask = ff_val[:,idm] > 0
+                y = ff_val[mask,idm]
+                y_err = ff_err2[mask,idm]
+                x_masked = x[mask]
+                popt, pcov = curve_fit(fitf,
+                                       x_masked,
+                                       y,
+                                       sigma=y_err,
+                                       absolute_sigma=True)
+                ff_fit[:,idm,0] = fitf(x, *popt)
+                ff_fit[:,idm,1] = fitf(x, *popt + np.sqrt(np.diag(pcov)))
+                ff_fit[:,idm,2] = fitf(x, *popt - np.sqrt(np.diag(pcov)))
             h = hist.Hist.new
             for (var_name, var_axis) in self.config_inst.x.fake_factor_method.axes.items(): 
                 h = eval(f'h.{var_axis.ax_str}') 
             h = h.StrCategory(['nominal', 'up', 'down'], name='syst', label='Statistical uncertainty of the fake factor')
-            ff_hist= h.Weight()
-            ff_hist.view().value[...,0] = ff_val
-            ff_hist.view().value[...,1] = ff_val + np.sqrt(ff_err2)
-            ff_hist.view().value[...,2] = np.maximum(ff_val - np.sqrt(ff_err2),0)
-            ff_hist.name = name
-            ff_hist.label = label
-            ff_corr = cl_convert.from_histogram(ff_hist)
-            ff_corr.data.flow = "clamp"
-            return ff_corr, ff_hist
+            ff_fitted = h.Weight()
+            
+            ff_fitted.view().value = ff_fit
+            ff_fitted.name = name
+            ff_fitted.label = label
+            
+            ff_raw = ff_fitted.copy().reset()
+            ff_raw.view().value[...,0] = ff_val
+            ff_raw.view().variance[...,0] = ff_err2
+            ff_raw.name = name + '_raw'
+            ff_raw.label = label + '_raw'
+            
+            
+           
+            
+            return ff_raw, ff_fitted
         
-        wj_corr, wj_h = get_ff_corr(self,
+        wj_raw, wj_fitted = get_ff_corr(self,
                               data_hists,
                               mc_hists,
                               num_reg = 'dr_num_wj',
@@ -385,7 +411,7 @@ class ComputeFakeFactors(
                               name='ff_wjets',
                               label='Fake factor W+jets')
         
-        qcd_corr, qcd_h = get_ff_corr(self,
+        qcd_raw, qcd_fitted = get_ff_corr(self,
                               data_hists,
                               mc_hists,
                               num_reg = 'dr_num_qcd',
@@ -393,16 +419,52 @@ class ComputeFakeFactors(
                               name='ff_qcd',
                               label='Fake factor QCD')
         
+        corr_list = []
+        for h in [wj_raw, wj_fitted, qcd_raw, qcd_fitted]:
+            corr = cl_convert.from_histogram(h)
+            corr.data.flow = "clamp"
+            corr.version = 2
+            corr_list.append(corr)
+        cset = correctionlib.schemav2.CorrectionSet(
+        schema_version=2,
+        description="Fake factors",
+        corrections=corr_list
+        )
+        self.output()['ff_json'].dump(cset.json(exclude_unset=True), formatter="json")
         for h_name in ['wj', 'qcd']:
-            the_hist = eval(f'{h_name}_h')
+            h_raw = eval(f'{h_name}_raw')
+            h_fitted = eval(f'{h_name}_fitted')
             
-            for syst in ['nominal','up','down']:
-                fig, ax = plt.subplots(figsize=(12, 8))
-                the_hist[...,syst].plot2d(ax=ax)
-                self.output()['plots']['_'.join((h_name,syst))].dump(fig, formatter="mpl")
+            fig, ax = plt.subplots(figsize=(12, 8))
+            h_raw[...,'nominal'].plot2d(ax=ax)
+            self.output()['plots']['_'.join((h_name,'nominal'))].dump(fig, formatter="mpl")
+           
+            dm_axis = h_raw.axes['tau_dm_pnet']
+            for dm in dm_axis:
+                h1d = h_raw[{'tau_dm_pnet': hist.loc(dm),
+                                'syst': hist.loc('nominal')}]
                 
-        self.output()['ff_json']['wj'].dump(wj_corr.json(exclude_unset=True), formatter="json")
-        self.output()['ff_json']['qcd'].dump(qcd_corr.json(exclude_unset=True), formatter="json")
+                hfit = h_fitted[{'tau_dm_pnet': hist.loc(dm)}]
+                
+                fig, ax = plt.subplots(figsize=(8, 6))
+                mask = h1d.counts() > 0
+                x = h1d.axes[0].centers[mask]
+                y = h1d.counts()[mask]
+                xerr = (np.diff(h1d.axes[0]).flatten()/2.)[mask],
+                yerr = np.sqrt(h1d.variances()).flatten()[mask],
+                ax.errorbar(x, y, xerr = xerr, yerr = yerr,
+                                label=f"PNet decay mode = {dm}",
+                                marker='o',
+                                fmt='o',
+                                line=None, color='#2478B7', capsize=4)
+                ax.plot(hfit.axes[0].centers,
+                        hfit[:,0].counts(),
+                        color='#FF867B')
+                ax.fill_between(hfit.axes[0].centers, hfit[:,2].counts(), hfit[:,1].counts(), color='#83d55f', alpha=0.5)
+                ax.set_ylabel('Fake Factor')
+                ax.set_xlabel('Tau pT [GeV]')
+                ax.set_title(f'Jet Fake Factors (Tau PNet Decay Mode {(dm)}')
+                self.output()['plots1d']['_'.join((h_name,str(dm)))].dump(fig, formatter="mpl")
 
 
 
@@ -458,157 +520,3 @@ class CreateDataDrivenHistograms(
         from IPython import embed; embed()
         # declare output: dict of histograms
         histograms = {}
-
-#         # run the weight_producer setup
-#         producer_reqs = self.weight_producer_inst.run_requires()
-#         reader_targets = self.weight_producer_inst.run_setup(producer_reqs, luigi.task.getpaths(producer_reqs))
-
-#         # create a temp dir for saving intermediate files
-#         tmp_dir = law.LocalDirectoryTarget(is_tmp=True)
-#         tmp_dir.touch()
-
-#         # get shift dependent aliases
-#         aliases = self.local_shift_inst.x("column_aliases", {})
-
-#         # define columns that need to be read
-#         read_columns = {Route("process_id")}
-#         read_columns |= set(map(Route, self.category_id_columns))
-#         read_columns |= set(self.weight_producer_inst.used_columns)
-#         read_columns |= set(map(Route, aliases.values()))
-#         read_columns |= {
-#             Route(inp)
-#             for variable_inst in (
-#                 self.config_inst.get_variable(var_name)
-#                 for var_name in law.util.flatten(self.variable_tuples.values())
-#             )
-#             for inp in ((
-#                 {variable_inst.expression}
-#                 if isinstance(variable_inst.expression, str)
-#                 # for variable_inst with custom expressions, read columns declared via aux key
-#                 else set(variable_inst.x("inputs", []))
-#             ) | (
-#                 # for variable_inst with selection, read columns declared via aux key
-#                 set(variable_inst.x("inputs", []))
-#                 if variable_inst.selection != "1"
-#                 else set()
-#             ))
-#         }
-
-#         # empty float array to use when input files have no entries
-#         empty_f32 = ak.Array(np.array([], dtype=np.float32))
-
-#         # iterate over chunks of events and diffs
-#         file_targets = [inputs["events"]["events"]]
-#         if self.producer_insts:
-#             file_targets.extend([inp["columns"] for inp in inputs["producers"]])
-#         # if self.ml_model_insts:
-#         #     file_targets.extend([inp["mlcolumns"] for inp in inputs["ml"]])
-
-#         # prepare inputs for localization
-#         with law.localize_file_targets(
-#             [*file_targets, *reader_targets.values()],
-#             mode="r",
-#         ) as inps:
-#             for (events, *columns), pos in self.iter_chunked_io(
-#                 [inp.abspath for inp in inps],
-#                 source_type=len(file_targets) * ["awkward_parquet"] + [None] * len(reader_targets),
-#                 read_columns=(len(file_targets) + len(reader_targets)) * [read_columns],
-#                 chunk_size=self.weight_producer_inst.get_min_chunk_size(),
-#             ):
-#                 # optional check for overlapping inputs
-#                 if self.check_overlapping_inputs:
-#                     self.raise_if_overlapping([events] + list(columns))
-
-#                 # add additional columns
-#                 events = update_ak_array(events, *columns)
-
-#                 # add aliases
-#                 events = add_ak_aliases(
-#                     events,
-#                     aliases,
-#                     remove_src=True,
-#                     missing_strategy=self.missing_column_alias_strategy,
-#                 )
-
-#                 # build the full event weight without fake factors
-#                 if hasattr(self.weight_producer_inst, "skip_func") and not self.weight_producer_inst.skip_func():
-#                     events, weight = self.weight_producer_inst(events)
-#                 else:
-#                     weight = ak.Array(np.ones(len(events), dtype=np.float32))
-
-#                 # define and fill histograms, taking into account multiple axes
-#                 for var_key, var_names in self.variable_tuples.items():
-#                     # get variable instances
-#                     variable_insts = [self.config_inst.get_variable(var_name) for var_name in var_names]
-
-                    
-#                     # create the histogram if not present yet
-#                     if var_key not in histograms:
-#                         for reg_key in ['ar_wj','ar_wj','ar_yields']:
-#                             h = (
-#                                 hist.Hist.new
-#                                 .IntCat([], name="process", growth=True)
-#                                 .IntCat([], name="shift", growth=True)
-#                             )
-#                             # add variable axes
-#                             for variable_inst in variable_insts:
-#                                 h = h.Var(
-#                                     variable_inst.bin_edges,
-#                                     name='_'.join((variable_inst.name, reg_key))
-#                                     label=variable_inst.get_full_x_title(),
-#                                 )
-#                             # enable weights and store it
-#                             histograms[var_key] = h.Weight()
-                            
-#                     # merge category ids
-#                     category_ids = ak.concatenate(
-#                         [Route(c).apply(events) for c in self.category_id_columns],
-#                         axis=-1,
-#                     )
-
-#                     # broadcast arrays so that each event can be filled for all its categories
-#                     fill_data = {
-#                         "category": category_ids,
-#                         "process": events.process_id,
-#                         "shift": np.ones(len(events), dtype=np.int32) * self.global_shift_inst.id,
-#                         "weight": weight,
-#                     }
-#                     for variable_inst in variable_insts:
-#                         # prepare the expression
-#                         expr = variable_inst.expression
-#                         if isinstance(expr, str):
-#                             route = Route(expr)
-#                             def expr(events, *args, **kwargs):
-#                                 if len(events) == 0 and not has_ak_column(events, route):
-#                                     return empty_f32
-#                                 return route.apply(events, null_value=variable_inst.null_value)
-#                         # apply it
-#                         fill_data[variable_inst.name] = expr(masked_events)
-
-#                     # fill it
-#                     fill_hist(
-#                         histograms[var_key],
-#                         fill_data,
-#                         last_edge_inclusive=self.last_edge_inclusive,
-#                     )
-
-#         # merge output files
-#         self.output()["hists"].dump(histograms, formatter="pickle")
-
-
-# # overwrite class defaults
-# check_overlap_tasks = law.config.get_expanded("analysis", "check_overlapping_inputs", [], split_csv=True)
-# CreateHistograms.check_overlapping_inputs = ChunkedIOMixin.check_overlapping_inputs.copy(
-#     default=CreateHistograms.task_family in check_overlap_tasks,
-#     add_default_to_description=True,
-# )
-
-
-# CreateHistogramsWrapper = wrapper_factory(
-#     base_cls=AnalysisTask,
-#     require_cls=CreateHistograms,
-#     enable=["configs", "skip_configs", "datasets", "skip_datasets", "shifts", "skip_shifts"],
-# )
-
-
-
