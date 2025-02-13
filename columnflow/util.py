@@ -6,15 +6,7 @@ Collection of general helpers and utilities.
 
 from __future__ import annotations
 
-__all__ = [
-    "UNSET",
-    "maybe_import", "import_plt", "import_ROOT", "import_file", "create_random_name", "expand_path",
-    "real_path", "ensure_dir", "wget", "call_thread", "call_proc", "ensure_proxy", "dev_sandbox",
-    "safe_div", "try_float", "try_complex", "try_int", "is_pattern", "is_regex", "pattern_matcher",
-    "dict_add_strict", "get_source_code",
-    "DotDict", "MockModule", "FunctionArgs", "ClassPropertyDescriptor", "classproperty",
-    "DerivableMeta", "Derivable",
-]
+__all__ = []
 
 import os
 import abc
@@ -37,7 +29,6 @@ import luigi
 
 from columnflow import env_is_dev, env_is_remote
 from columnflow.types import Callable, Any, Sequence, Union, ModuleType
-
 
 #: Placeholder for an unset value.
 UNSET = object()
@@ -145,6 +136,29 @@ def import_file(path: str, attr: str | None = None):
         return pkg[attr]
 
     return pkg
+
+
+def ipython_shell(
+    confirm_exit: bool = False,
+    pretty_print: bool = True,
+    banner: bool = False,
+):
+    """
+    Starts an IPython shell with configurable parameters.
+
+    :param confirm_exit: Whether to ask for confirmation before exiting the shell.
+    :param pretty_print: Whether to use pretty printing.
+    :param banner: Whether to display the IPython banner.
+    """
+    # set the config
+    from traitlets.config import Config
+    config = Config()
+    config.TerminalInteractiveShell.confirm_exit = confirm_exit
+    config.TerminalInteractiveShell.pretty_print = pretty_print
+
+    # start the shell
+    from IPython.terminal.embed import InteractiveShellEmbed
+    return InteractiveShellEmbed.instance(config=config, display_banner=banner)
 
 
 def create_random_name() -> str:
@@ -438,6 +452,15 @@ def try_int(i: Any) -> bool:
         return True
     except (ValueError, TypeError):
         return False
+
+
+def maybe_int(i: Any) -> Any:
+    """
+    Returns *i* as an integer if it is a whole number, and as a float otherwise.
+    """
+    if isinstance(i, (int, bool)) or (isinstance(i, float) and i.is_integer()):
+        return int(i)
+    return i
 
 
 def is_pattern(s: str) -> bool:
@@ -919,3 +942,20 @@ class KeyValueMessage(luigi.worker.SchedulerMessage):
 
     def __str__(self) -> str:
         return str(self.value)
+
+
+def load_correction_set(target: law.FileSystemFileTarget) -> Any:
+    """
+    Loads a correction set using the correctionlib from a file *target*.
+    """
+    import correctionlib
+
+    # extend the Correction object
+    correctionlib.highlevel.Correction.__call__ = correctionlib.highlevel.Correction.evaluate
+
+    # use the path when the input file is a normal json
+    if target.ext() == "json":
+        return correctionlib.CorrectionSet.from_file(target.abspath)
+
+    # otherwise, assume the input file is compressed
+    return correctionlib.CorrectionSet.from_string(target.load(formatter="gzip").decode("utf-8"))

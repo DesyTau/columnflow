@@ -9,7 +9,7 @@ from __future__ import annotations
 __all__ = []
 
 import os
-import gc
+import sys
 import re
 import math
 import time
@@ -19,7 +19,7 @@ import threading
 import multiprocessing
 import multiprocessing.pool
 from functools import partial
-from collections import namedtuple, OrderedDict, deque
+from collections import namedtuple, OrderedDict, deque, defaultdict
 
 import law
 import order as od
@@ -40,21 +40,64 @@ maybe_import("coffea.nanoevents")
 maybe_import("coffea.nanoevents.methods.base")
 maybe_import("coffea.nanoevents.methods.nanoaod")
 pq = maybe_import("pyarrow.parquet")
-hist = maybe_import("hist")
 
 
 # loggers
 logger = law.logger.get_logger(__name__)
 logger_perf = law.logger.get_logger(f"{__name__}-perf")
 
-#: Columns that are always required when opening a nano file with coffea.
-mandatory_coffea_columns = {"run", "luminosityBlock", "event"}
-
 #: Empty-value definition in places where an integer number is expected but not present.
 EMPTY_INT = -99999
 
 #: Empty-value definition in places where a float number is expected but not present.
 EMPTY_FLOAT = -99999.0
+
+#: Columns that are always required when opening a nano file with coffea.
+mandatory_coffea_columns = {"run", "luminosityBlock", "event"}
+
+#: Information on behavior of certain collections to (re-)attach it via attach_behavior.
+default_coffea_collections = {
+    "Jet": {
+        "type_name": "Jet",
+        "check_attr": "metric_table",
+        "skip_fields": "*Idx*G",
+    },
+    "FatJet": {
+        "type_name": "FatJet",
+        "check_attr": "metric_table",
+        "skip_fields": "*Idx*G",
+    },
+    "SubJet": {
+        "type_name": "Jet",
+        "check_attr": "metric_table",
+        "skip_fields": "*Idx*G",
+    },
+    "Muon": {
+        "type_name": "Muon",
+        "check_attr": "metric_table",
+        "skip_fields": "*Idx*G",
+    },
+    "Electron": {
+        "type_name": "Electron",
+        "check_attr": "metric_table",
+        "skip_fields": "*Idx*G",
+    },
+    "Tau": {
+        "type_name": "Tau",
+        "check_attr": "metric_table",
+        "skip_fields": "*Idx*G",
+    },
+    "MET": {
+        "type_name": "MissingET",
+        "check_attr": "metric_table",
+        "skip_fields": "*Idx*G",
+    },
+    "PuppiMET": {
+        "type_name": "MissingET",
+        "check_attr": "metric_table",
+        "skip_fields": "*Idx*G",
+    },
+}
 
 
 class ItemEval(object):
@@ -1079,6 +1122,105 @@ def sorted_ak_to_root(
     f.close()
 
 
+def sorted_indices_from_mask(
+    mask: ak.Array,
+    metric: ak.Array,
+    sort_axis: int = -1,
+    ascending: bool = True,
+) -> ak.Array:
+    """
+    Takes a boolean *mask* and converts it to an array of indices, sorted using a *metric* of equal
+    size along a *sort_axis* and, by default, in *ascending* order. Example:
+
+    .. code-block:: python
+
+        mask = [[True, False, False, True], ...]
+        metric = [[5.0, 1.0, 0.9, 4.1], ...]
+
+        sorted_indices_from_mask(mask, metric)
+        # -> [[3, 0], ...]
+
+    :param mask: The boolean mask.
+    :param metric: The metric to sort by.
+    :param sort_axis: The axis along which to sort.
+    :param ascending: Whether to sort in ascending order.
+    :return: An array of sorted indices.
+    """
+    indices = ak.argsort(metric, axis=sort_axis, ascending=ascending)
+    return indices[mask[indices]]
+
+
+def mask_from_indices(indices: np.array | ak.Array, layout_array: ak.Array) -> ak.Array:
+    """
+    Takes an array of *indices* and a *layout_array* and returns a boolean mask with the same shape
+    as *layout_array* where values at *indices* are set to *True*. Example:
+
+    .. code-block:: python
+
+        indices = [[2, 0], ...]
+        layout_array = [[x, y, z], ...]
+
+        mask_from_indices(indices, layout_array)
+        # -> [[True, False, True], ...]
+
+    :param indices: The indices to set to *True*.
+    :param layout_array: The layout array to use as a template.
+    :return: A boolean mask with the same shape as *layout_array*.
+    """
+    # create a flat mask starting with false
+    flat_mask = flat_np_view(ak.full_like(layout_array, False, dtype=bool))
+    # use offsets of the layout to create increasing indices
+    flat_indices = flat_np_view((indices + layout_array.layout.offsets.data[:-1, ..., None]))
+    # set the indices to true
+    flat_mask[flat_indices] = True
+    # layout the mask
+    return layout_ak_array(flat_mask, layout_array)
+
+
+def full_like(layout_array: ak.Array, value: Any, *, dtype: Any = None, **kwargs) -> ak.Array:
+    """
+    Creates an awkward array with the same layout as *layout_array* and fills it with a constant
+    *value* of type *dtype*. The difference to awkward's standalone ``ak.full_like`` is that all
+    original parameters (like docstrings, annotations, etc.) are removed from the layout of the
+    resulting array.
+
+    :param layout_array: The layout array to use as a template.
+    :param value: The value to fill the array with.
+    :param dtype: The data type of the array.
+    :return: An awkward array with the same layout as *layout_array* and filled with *value*.
+    """
+    return ak.without_parameters(ak.full_like(layout_array, value, dtype=dtype, **kwargs))
+
+
+def fill_at(
+    ak_array: ak.Array,
+    where: ak.Array,
+    route: Route | str,
+    value: float | int,
+    *,
+    value_type: type | str | None = None,
+) -> ak.Array:
+    """
+    Fills a column identified through *route* in an *ak_array* with a *value* where a
+    corresponding *where* mask is *True*.
+
+    :param ak_array: The input array.
+    :param where: The boolean mask where to fill the value.
+    :param route: The route describing the column to fill.
+    :param value: The value to fill.
+    :param value_type: The data type of the value. Inferred from value if not set.
+    :return: A new array with the value filled at the specified route.
+    """
+    # cast to route
+    route = Route(route)
+
+    # create new values with selective values
+    new_values = ak.where(where, value, route.apply(ak_array))
+
+    # insert back
+    return set_ak_column(ak_array, route, new_values, value_type=value_type)
+
+
 def attach_behavior(
     ak_array: ak.Array,
     type_name: str,
@@ -1127,6 +1269,57 @@ def attach_behavior(
     )
 
 
+def attach_coffea_behavior(
+    ak_array: ak.Array,
+    collections: dict | Sequence | None = None,
+) -> ak.Array:
+    """
+    Add coffea's NanoEvents behavior to collections in an *ak_array*. When empty, *collections*
+    defaults to :py:attr:``default_coffea_collections``.
+
+    :param ak_array: The input array.
+    :param collections: The collections to attach behavior to.
+    :return: The array with the behavior attached.
+    """
+    # update or reduce collection info
+    _collections = default_coffea_collections
+    if isinstance(collections, dict):
+        _collections = _collections.copy()
+        _collections.update(collections)
+    elif isinstance(collections, (list, tuple)):
+        _collections = {
+            name: info
+            for name, info in _collections.items()
+            if name in collections
+        }
+
+    for name, info in _collections.items():
+        if not info:
+            continue
+
+        # get the collection to update
+        if name not in ak_array.fields:
+            continue
+        coll = ak_array[name]
+
+        # when a check_attr is defined, do nothing in case it already exists
+        if info.get("check_attr") and getattr(coll, info["check_attr"], None) is not None:
+            continue
+
+        # default infos
+        type_name = info.get("type_name") or name
+        skip_fields = info.get("skip_fields")
+
+        # apply the behavior
+        ak_array = set_ak_column(
+            ak_array,
+            name,
+            attach_behavior(coll, type_name, skip_fields=skip_fields),
+        )
+
+    return ak_array
+
+
 def layout_ak_array(data_array: np.array | ak.Array, layout_array: ak.Array) -> ak.Array:
     """
     Takes a *data_array* and structures its contents into the same structure as *layout_array*, with
@@ -1159,6 +1352,7 @@ def ak_copy(ak_array: ak.Array) -> ak.Array:
     removed.
     """
     return layout_ak_array(np.array(ak.flatten(ak_array)), ak_array)
+
 
 
 def fill_hist(
@@ -1223,6 +1417,7 @@ def fill_hist(
     # else:
     arrays = ak.flatten(ak.cartesian(data))
     h.fill(**fill_kwargs, **{field: arrays[field] for field in arrays.fields})
+
 
 
 class RouteFilter(object):
@@ -1655,6 +1850,9 @@ class ArrayFunction(Derivable):
                         f"to set: {e.args[0]}",
                     )
                     raise e
+
+                # remove keyword from further processing
+                kwargs.pop(attr)
             else:
                 try:
                     deps = set(law.util.make_list(getattr(self.__class__, attr)))
@@ -1669,11 +1867,15 @@ class ArrayFunction(Derivable):
             # also register a set for storing instances, filled in create_dependencies
             setattr(self, f"{attr}_instances", set())
 
+        # set all other keyword arguments as instance attributes
+        for attr, value in kwargs.items():
+            setattr(self, attr, value)
+
         # dictionary of dependency class to instance, set in create_dependencies
         self.deps = DotDict()
 
         # dictionary of keyword arguments mapped to dependenc classes to be forwarded to their init
-        self.deps_kwargs = DotDict()
+        self.deps_kwargs = defaultdict(dict)  # TODO: avoid using `defaultdict`
 
         # deferred part of the initialization
         if deferred_init:
@@ -1738,8 +1940,15 @@ class ArrayFunction(Derivable):
             self.init_func()
 
         # instantiate dependencies again, but only perform updates
-        self.create_dependencies(instance_cache, only_update=True)
+        # self.create_dependencies(instance_cache, only_update=True)
 
+        # NOTE: the above does not correctly propagate `deps_kwargs` to the dependencies.
+        # As a workaround, instantiate all dependencies fully a second time by
+        # invalidating the instance cache and setting `only_update` to False
+        instance_cache = {}
+        self.create_dependencies(instance_cache, only_update=False)
+
+        # NOTE: return value currently not being used anywhere -> remove?
         return instance_cache
 
     def create_dependencies(
@@ -2674,23 +2883,30 @@ class DaskArrayReader(object):
         self,
         path: str,
         open_options: dict | None = None,
-        materialization_strategy: MaterializationStrategy = MaterializationStrategy.SLICES,
+        materialization_strategy: MaterializationStrategy = MaterializationStrategy.PARTITIONS,
     ):
         super().__init__()
 
-        # open the file
         open_options = open_options or {}
-        open_options["split_row_groups"] = False
-        self.dak_array = dak.from_parquet(path, **open_options)
-        if materialization_strategy == self.MaterializationStrategy.SLICES:
-            # NOTE: by calling the `persist` method, the dask array is directly materialized in memory
-            # to prevent that the dask array is materialized multiple times. This prevents us from
-            # loading data in a chunked manner, which is not ideal for large datasets, but at the
-            # moment we do not have a better solution.
-            # This fix should be removed once we find a solution to only materialize the data
-            # from the sliced array that is actually needed.
-            self.dak_array = self.dak_array.persist()
 
+        # backwards compatibility: when row group splitting is enbaled (the default), detect whether
+        # the input file was written with support for that; a file does not support splitting in
+        # case nested nodes separated by "*.list.element.*" (rather than "*.list.item.*") are found
+        # (to be removed in the future)
+        if open_options.get("split_row_groups"):
+            nodes = ak.ak_from_parquet.metadata(path)[0]
+            cre = re.compile(r"^.+\.list\.element(|\..+)$")
+            if any(map(cre.match, nodes)):
+                logger.warning(
+                    f"while reading input parquet file from {path}, 'split_row_groups' is enabled "
+                    "but the file does not support it; it was probably created with an older "
+                    "version of columnflow which did not make use of this feature; row group "
+                    "splitting will be disabled, potentially leading to suboptimal performance",
+                )
+                open_options["split_row_groups"] = False
+
+        # open the file
+        self.dak_array = dak.from_parquet(path, **open_options)
         self.path = path
 
         # strategy dependent attributes and setup
@@ -2702,7 +2918,7 @@ class DaskArrayReader(object):
             # mapping of partition indices to cache information (chunks still to be handled and a
             # cached array) that changes during the read process in _materialize_via_partitions
             self.partition_cache = {
-                p: DotDict(chunks=[], array=None)
+                p: DotDict(chunks=set(), array=None)
                 for p in range(self.dak_array.npartitions)
             }
 
@@ -2723,11 +2939,10 @@ class DaskArrayReader(object):
         return self.dak_array is None
 
     def close(self) -> None:
-        # free memory and perform an eager, overly cautious gc round
+        # free memory
         self.dak_array = None
         if getattr(self, "partition_cache", None):
             self.partition_cache.clear()
-        gc.collect()
 
     def materialize(self, *args, **kwargs) -> ak.Array:
         """
@@ -2805,7 +3020,7 @@ class DaskArrayReader(object):
                         if p_start >= _entry_stop > _entry_start:
                             break
                         partitions.append(p)
-                        self.partition_cache[p].chunks.append(_chunk_index)
+                        self.partition_cache[p].chunks.add(_chunk_index)
                     self.chunk_to_partitions[_chunk_index] = partitions
 
         # read partitions one at a time and store parts that make up the chunk for concatenation
@@ -2813,7 +3028,7 @@ class DaskArrayReader(object):
         for p in self.chunk_to_partitions[chunk_index]:
             # obtain the array
             with self.partition_locks[p]:
-                # remove this chunk for the list of chunks to be handled
+                # remove this chunk from the list of chunks to be handled
                 self.partition_cache[p].chunks.remove(chunk_index)
 
                 if self.partition_cache[p].array is None:
@@ -2836,8 +3051,8 @@ class DaskArrayReader(object):
         # construct the full array
         arr = parts[0] if len(parts) == 1 else ak.concatenate(parts, axis=0)
 
+        # cleanup
         del parts
-        gc.collect()
 
         return arr
 
@@ -3362,6 +3577,7 @@ class ChunkedIOHandler(object):
 
         # default open options
         open_options = open_options or {}
+        open_options.setdefault("split_row_groups", True)  # preserve input file partitions
 
         # inject read_columns
         if read_columns and "columns" not in open_options:
@@ -3433,7 +3649,6 @@ class ChunkedIOHandler(object):
 
         # reset some attributes
         del self.source_objects[:]
-        gc.collect()
         self.n_entries = None
 
         # open all sources and make sure they have the same number of entries
@@ -3444,7 +3659,11 @@ class ChunkedIOHandler(object):
             self.read_columns_list,
         )):
             # open the source
-            obj, n = source_handler.open(source, open_options=open_options, read_columns=read_columns)
+            obj, n = source_handler.open(
+                source,
+                open_options=open_options,
+                read_columns=(sorted(read_columns) if read_columns else read_columns),
+            )
             # check entries
             if i == 0:
                 self.n_entries = n
@@ -3470,9 +3689,8 @@ class ChunkedIOHandler(object):
         for (obj, source_handler) in zip(self.source_objects, self.source_handlers):
             source_handler.close(obj)
 
-        # just delete the file cache and reset some attributes
+        # delete the file cache
         del self.source_objects[:]
-        gc.collect()
 
     def queue(self, *args, **kwargs) -> None:
         """
@@ -3491,7 +3709,12 @@ class ChunkedIOHandler(object):
 
         # create a list of read functions
         read_funcs = [
-            partial(source_handler.read, obj, read_options=read_options, read_columns=read_columns)
+            partial(
+                source_handler.read,
+                obj,
+                read_options=read_options,
+                read_columns=(sorted(read_columns) if read_columns else read_columns),
+            )
             for obj, source_handler, read_options, read_columns in zip(
                 self.source_objects,
                 self.source_handlers,
@@ -3538,17 +3761,15 @@ class ChunkedIOHandler(object):
                 # find the first done result and remove it from the list
                 # this will do nothing in the first iteration
                 result_obj = no_result
-                for i, result in enumerate(list(results)):
-                    if not result.ready():
-                        continue
-
-                    result_obj = result.get()
-                    results.pop(i)
-                    break
+                for i, result in enumerate(results):
+                    if result.ready():
+                        result_obj = result.get()
+                        results.pop(i)
+                        break
 
                 # if no result was ready, sleep and try again
                 if results and result_obj == no_result:
-                    time.sleep(0.05)
+                    time.sleep(0.02)
                     continue
 
                 # immediately try to fill up the pool
@@ -3560,23 +3781,27 @@ class ChunkedIOHandler(object):
                 if isinstance(result_obj, self.ReadResult):
                     if self.iter_message:
                         print(self.iter_message.format(pos=result_obj.chunk_pos))
+                        sys.stdout.flush()
 
                     # probably overly-cautious, but run garbage collection before and after
-                    gc.collect()
                     t1 = time.perf_counter()
                     try:
                         yield (result_obj.chunk, result_obj.chunk_pos)
                     finally:
                         duration = time.perf_counter() - t1
                         logger_perf.debug(
-                            f"processing of chunk {result_obj.chunk_pos.index} took " +
-                            law.util.human_duration(seconds=duration),
+                            f"processing of chunk {result_obj.chunk_pos.index} took "
+                            f"{law.util.human_duration(seconds=duration)}",
                         )
-                    gc.collect()
-        finally:
+                del result_obj
+            self.pool.close()
+        except:
             self.pool.terminate()
+            raise
+        finally:
             self.pool.join()
             self.pool = None
+            del results
 
     def __del__(self):
         """
