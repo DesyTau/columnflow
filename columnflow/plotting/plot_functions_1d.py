@@ -14,7 +14,7 @@ from columnflow.types import Iterable
 from columnflow.util import maybe_import
 from columnflow.plotting.plot_all import plot_all
 from columnflow.plotting.plot_util import (
-    prepare_plot_config,
+    prepare_stack_plot_config,
     prepare_style_config,
     remove_residual_axis,
     apply_variable_settings,
@@ -100,7 +100,7 @@ def plot_variable_per_process(
     sorted_hists = apply_process_settings(sorted_hists, process_settings)
     sorted_hists = apply_density_to_hists(sorted_hists, density)
 
-    plot_config = prepare_plot_config(
+    plot_config = prepare_stack_plot_config(
         sorted_hists,
         shape_norm=shape_norm,
         hide_errors=hide_errors,
@@ -309,7 +309,7 @@ def plot_cutflow(
     hists = hists_merge_cutflow_steps(hists)
 
     # setup plotting config
-    plot_config = prepare_plot_config(
+    plot_config = prepare_stack_plot_config(
         hists,
         shape_norm=shape_norm,
         hide_errors=hide_errors,
