@@ -282,7 +282,7 @@ def normalization_weights_setup(
             MergeSelectionStats.merge_counts(merged_selection_stats, stats)
     else:
 
-        merged_selection_stats = normalization_selection_stats[self.dataset_inst.name]
+        merged_selection_stats = selection_stats[self.dataset_inst.name]
 
     # determine all proceses at any depth in the stitching datasets
     process_insts = {
