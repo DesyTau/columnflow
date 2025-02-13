@@ -207,7 +207,8 @@ def plot_all(
     else:
         fig, ax = plt.subplots()
         axs = (ax,)
-
+    total_events = kwargs["total_events"]
+    total_variance = kwargs["total_variance"]
     for key, cfg in plot_config.items():
         if "method" not in cfg:
             raise ValueError(f"no method given in plot_cfg entry {key}")
@@ -241,7 +242,7 @@ def plot_all(
     # prioritize style_config ax settings
     ax_kwargs.update(style_config.get("ax_cfg", {}))
 
-    # ax configs that can not be handled by `ax.set`
+    # ax configs that can not be handled by ax.set
     minorxticks = ax_kwargs.pop("minorxticks", None)
     minoryticks = ax_kwargs.pop("minoryticks", None)
 
@@ -275,7 +276,7 @@ def plot_all(
         legend_kwargs = {
             "ncol": 2,
             "loc": "center left",
-            "bbox_to_anchor": (0.35, 0.8),  # Position the legend outside the plot
+            "bbox_to_anchor": (0.25, 0.8),  # Position the legend outside the plot
                                          # Moves the legend to the right side of the plot.
                                          # The first value (1) controls the horizontal position,
                                          # and the second value (0.95) controls the vertical position.
@@ -286,8 +287,41 @@ def plot_all(
 
         # retrieve the legend handles and their labels
         handles, labels = ax.get_legend_handles_labels()
+        
+        keywords_to_labels = {
+            'dy_lep'     : '$Z \\rightarrow ll$',
+            'dy_z2tautau': '$Z \\rightarrow \\tau\\tau$+jet fakes',
+            'dy_z2mumu'  : '$Z \\rightarrow \\mu\\mu$',
+            'dy_z2ee'    : '$Z \\rightarrow ee$',
+            'vv'         : 'Di-Boson',
+            'tt'         : '$t\\bar{t}$ + Jets',
+            'st'         : 'Single $t$/$\\bar{t}$',
+            'wj'         : 'W + jets',
+            'qcd'        : 'QCD',
+            'data'       : 'Data',
+        }
 
-        # assume all `StepPatch` objects are part of MC stack
+        # Create process_to_label dynamically based on matching
+        process_to_label = {
+            process.name: keywords_to_labels.get(process.name, "Unknown")
+            for process in total_events.keys()
+        }
+
+        # Construct the updated labels
+        updated_labels = []
+        for label in labels:
+            matched = False
+            for process, yield_value in total_events.items():
+                variance_value = total_variance.get(process, 0)  # Get variance, default to 0 if not found
+                if process_to_label.get(process.name) == label:
+                    updated_labels.append(f"{label} ({yield_value:.0f} ± {variance_value:.0f})")
+                    matched = True
+                    break
+            if not matched:
+                # If no match is found, keep the original label
+                updated_labels.append(label)
+   
+        # assume all StepPatch objects are part of MC stack
         in_stack = [
             isinstance(handle, mpl.patches.StepPatch)
             for handle in handles
@@ -301,10 +335,10 @@ def plot_all(
                 return list(entries)
 
             handles = shuffle(handles, in_stack)
-            labels = shuffle(labels, in_stack)
+            updated_labels = shuffle(updated_labels, in_stack)
 
         # make legend using ordered handles/labels
-        ax.legend(handles, labels, **legend_kwargs)
+        ax.legend(handles, updated_labels, **legend_kwargs)
 
     # custom annotation
     log_x = style_config.get("ax_cfg", {}).get("xscale", "linear") == "log"

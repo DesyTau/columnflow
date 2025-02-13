@@ -1211,16 +1211,18 @@ def fill_hist(
             data[ax.name] = ak.copy(data[ax.name])
             flat_np_view(data[ax.name])[right_egde_mask] -= ax.widths[-1] * 1e-5
 
-    # fill
-    if 'event' in data.keys():
-        arrays = {}
-        for ax_name in axis_names:
-            if ax_name in data.keys():
-                arrays[ax_name] = data[ax_name]
-        h.fill(**fill_kwargs, **arrays)
-    else:
-        arrays = ak.flatten(ak.cartesian(data))
-        h.fill(**fill_kwargs, **{field: arrays[field] for field in arrays.fields})
+    print("CreateHistograms /afs/cern.ch/user/j/jmalvaso/CPinHToTauTau/modules/columnflow/columnflow/columnar_util.py needs to be fixed")
+    print("Comment until else to run plotvariables")
+    #fill
+    # if 'event' in data.keys():
+    #     arrays = {}
+    #     for ax_name in axis_names:
+    #         if ax_name in data.keys():
+    #             arrays[ax_name] = data[ax_name]
+    #     h.fill(**fill_kwargs, **arrays)
+    # else:
+    arrays = ak.flatten(ak.cartesian(data))
+    h.fill(**fill_kwargs, **{field: arrays[field] for field in arrays.fields})
 
 
 class RouteFilter(object):
