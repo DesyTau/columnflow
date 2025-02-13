@@ -6,8 +6,6 @@ Example plot functions for one-dimensional plots.
 
 from __future__ import annotations
 
-__all__ = []
-
 from collections import OrderedDict
 
 import law
@@ -16,7 +14,7 @@ from columnflow.types import Iterable
 from columnflow.util import maybe_import
 from columnflow.plotting.plot_all import plot_all
 from columnflow.plotting.plot_util import (
-    prepare_stack_plot_config,
+    prepare_plot_config,
     prepare_style_config,
     remove_residual_axis,
     apply_variable_settings,
@@ -26,7 +24,6 @@ from columnflow.plotting.plot_util import (
     get_position,
     get_profile_variations,
     blind_sensitive_bins,
-    join_labels,
 )
 
 hist = maybe_import("hist")
@@ -47,6 +44,8 @@ def plot_variable_per_process(
     density: bool | None = False,
     shape_norm: bool | None = False,
     yscale: str | None = "",
+    hide_errors: bool | None = None,
+    legend_yields: bool | None = True,
     process_settings: dict | None = None,
     variable_settings: dict | None = None,
     **kwargs,
@@ -56,10 +55,8 @@ def plot_variable_per_process(
     the process with the highest number of events first, followed by the others,
     and the process with the second highest number of events last.
     Handles cases with only one or two processes.
-
-    """
+    """ 
     remove_residual_axis(hists, "shift")
-
     # Define the color maps
     color_maps = {
         "6": ["#5790fc", "#7a21dd", "#964a8b", "#9c9ca1", "#e42536", "#f89c20"],
@@ -72,10 +69,15 @@ def plot_variable_per_process(
 
     # Calculate the total number of events for each process
     total_events = {key: sum(hist.values()) for key, hist in hists.items()}
-
+    total_variance = {key: np.sqrt(sum(hist.variances())) for key, hist in hists.items()}
+    
+    # # Add total_events to kwargs
+    kwargs["total_events"] = total_events
+    kwargs["total_variance"] = total_variance
+    
     # Sort processes by total number of events in descending order
-    sorted_hists_desc = OrderedDict(sorted(hists.items(), key=lambda item: total_events[item[0]], reverse=True))
-
+    # sorted_hists_desc = OrderedDict(sorted(hists.items(), key=lambda item: total_events[item[0]], reverse=True))
+    sorted_hists_desc = OrderedDict(hists.items())
     # Get keys of sorted processes
     sorted_keys = list(sorted_hists_desc.keys())
 
@@ -88,22 +90,26 @@ def plot_variable_per_process(
         custom_order = sorted_keys
     else:
         # More than two processes, custom order: highest, rest, then second highest
-        custom_order = [sorted_keys[0]] + sorted_keys[2:] + [sorted_keys[1]]
-
+        #custom_order = [sorted_keys[0]] + sorted_keys[2:] + [sorted_keys[1]]
+        custom_order = sorted_keys 
     # Reorder histograms based on custom order
     sorted_hists = OrderedDict((key, sorted_hists_desc[key]) for key in custom_order)
 
     variable_inst = variable_insts[0]
-    hists = apply_variable_settings(hists, variable_insts, variable_settings)
-    hists = apply_process_settings(hists, process_settings)
-    hists = apply_density_to_hists(hists, density)
+    sorted_hists = apply_variable_settings(sorted_hists, variable_insts, variable_settings)
+    sorted_hists = apply_process_settings(sorted_hists, process_settings)
+    sorted_hists = apply_density_to_hists(sorted_hists, density)
 
-    plot_config = prepare_stack_plot_config(hists, shape_norm=shape_norm, **kwargs)
+    plot_config = prepare_plot_config(
+        sorted_hists,
+        shape_norm=shape_norm,
+        hide_errors=hide_errors,
+    )
 
     if 'data' not in plot_config:
 
         # Determine the appropriate color map based on the number of processes
-        num_processes = len(hists)
+        num_processes = len(sorted_hists)
         if num_processes <= 6:
             colors = color_maps["6"][:num_processes]
         elif num_processes == 7:
@@ -129,53 +135,6 @@ def plot_variable_per_process(
         style_config["ax_cfg"]["ylabel"] = r"$\Delta N/N$"
 
     return plot_all(plot_config, style_config, **kwargs)
-
-
-
-# def plot_variable_per_process(
-#     hists: OrderedDict,
-#     config_inst: od.Config,
-#     category_inst: od.Category,
-#     variable_insts: list[od.Variable],
-#     style_config: dict | None = None,
-#     density: bool | None = False,
-#     shape_norm: bool | None = False,
-#     yscale: str | None = "",
-#     hide_errors: bool | None = None,
-#     process_settings: dict | None = None,
-#     variable_settings: dict | None = None,
-#     **kwargs,
-# ) -> plt.Figure:
-#     """
-#     TODO.
-#     """
-#     remove_residual_axis(hists, "shift")
-
-#     variable_inst = variable_insts[0]
-#     blinding_threshold = kwargs.get("blinding_threshold", None)
-
-#     if blinding_threshold:
-#         hists = blind_sensitive_bins(hists, config_inst, blinding_threshold)
-#     hists = apply_variable_settings(hists, variable_insts, variable_settings)
-#     hists = apply_process_settings(hists, process_settings)
-#     hists = apply_density_to_hists(hists, density)
-
-#     plot_config = prepare_plot_config(
-#         hists,
-#         shape_norm=shape_norm,
-#         hide_errors=hide_errors,
-#     )
-
-#     default_style_config = prepare_style_config(
-#         config_inst, category_inst, variable_inst, density, shape_norm, yscale,
-#     )
-
-#     style_config = law.util.merge_dicts(default_style_config, style_config, deep=True)
-#     if shape_norm:
-#         style_config["ax_cfg"]["ylabel"] = r"$\Delta N/N$"
-
-#     return plot_all(plot_config, style_config, **kwargs)
-
 
 def plot_variable_variants(
     hists: OrderedDict,
@@ -302,10 +261,14 @@ def plot_shifted_variable(
                     plot_cfg[key]["yerr"] = None
 
     # legend title setting
-    if not legend_title and len(hists) == 1:
-        # use process label as default if 1 process
-        process_inst = list(hists.keys())[0]
-        legend_title = process_inst.label
+    if not legend_title:
+        if len(hists) == 1:
+            # use process label as default if 1 process
+            process_inst = list(hists.keys())[0]
+            legend_title = process_inst.label
+        else:
+            # default to `Background` for multiple processes
+            legend_title = "Background"
 
     if not yscale:
         yscale = "log" if variable_inst.log_y else "linear"
@@ -315,8 +278,7 @@ def plot_shifted_variable(
     )
     default_style_config["rax_cfg"]["ylim"] = (0.25, 1.75)
     default_style_config["rax_cfg"]["ylabel"] = "Ratio"
-    if legend_title:
-        default_style_config["legend_cfg"]["title"] = legend_title
+    default_style_config["legend_cfg"]["title"] = legend_title
 
     style_config = law.util.merge_dicts(default_style_config, style_config, deep=True)
     if shape_norm:
@@ -333,6 +295,7 @@ def plot_cutflow(
     density: bool | None = False,
     shape_norm: bool = False,
     yscale: str | None = None,
+    hide_errors: bool | None = None,
     process_settings: dict | None = None,
     **kwargs,
 ) -> plt.Figure:
@@ -346,7 +309,11 @@ def plot_cutflow(
     hists = hists_merge_cutflow_steps(hists)
 
     # setup plotting config
-    plot_config = prepare_stack_plot_config(hists, shape_norm=shape_norm, **kwargs)
+    plot_config = prepare_plot_config(
+        hists,
+        shape_norm=shape_norm,
+        hide_errors=hide_errors,
+    )
 
     if shape_norm:
         # switch normalization to normalizing to `initial step` bin
@@ -371,9 +338,6 @@ def plot_cutflow(
     if not yscale:
         yscale = "linear"
 
-    # build the label from category
-    cat_label = join_labels(category_inst.label)
-
     default_style_config = {
         "ax_cfg": {
             "ylabel": "Selection efficiency" if shape_norm else "Selection yield",
@@ -384,7 +348,7 @@ def plot_cutflow(
         "legend_cfg": {
             "loc": "upper right",
         },
-        "annotate_cfg": {"text": cat_label or ""},
+        "annotate_cfg": {"text": category_inst.label},
         "cms_label_cfg": {
             "lumi": round(0.001 * config_inst.x.luminosity.get("nominal"), 2),  # /pb -> /fb
             "com": config_inst.campaign.ecm,

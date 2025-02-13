@@ -41,7 +41,6 @@ def category_ids(
     for cat_inst, categorizers in self.categorizer_map.items():
         # start with a true mask
         cat_mask = np.ones(len(events), dtype=bool)
-
         # loop through selectors
         for categorizer in categorizers:
             events, mask = self[categorizer](events, **kwargs)
