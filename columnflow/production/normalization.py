@@ -281,6 +281,7 @@ def normalization_weights_setup(
         for stats in selection_stats.values():
             MergeSelectionStats.merge_counts(merged_selection_stats, stats)
     else:
+
         merged_selection_stats = selection_stats[self.dataset_inst.name]
 
     # determine all proceses at any depth in the stitching datasets
@@ -337,6 +338,7 @@ def normalization_weights_setup(
             else 0
         )
 
+
         # fill the process weight table
         for proc_id, br in branching_ratios.items():
             #sum_weights = merged_selection_stats["sum_mc_weight_per_process"][str(proc_id)]
@@ -346,13 +348,12 @@ def normalization_weights_setup(
         # fill the process weight table with per-process cross sections
         for process_inst in process_insts:
             if self.config_inst.campaign.ecm not in process_inst.xsecs.keys():
-                raise KeyError(
-                    f"no cross section registered for process {process_inst} for center-of-mass "
-                    f"energy of {self.config_inst.campaign.ecm}",
-                )
+             
+                continue
             #sum_weights = merged_selection_stats["sum_mc_weight_per_process"][str(process_inst.id)]
             #quick fix that need to be fixed
             ################################
+            #n_evt_per_file = /self.dataset_inst.n_files
             sum_weights = self.dataset_inst.n_events
             ################################
             xsec = process_inst.get_xsec(self.config_inst.campaign.ecm).nominal

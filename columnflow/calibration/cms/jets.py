@@ -1,4 +1,4 @@
-# # coding: utf-8
+# coding: utf-8
 
 # """
 # Jet energy corrections and jet resolution smearing.

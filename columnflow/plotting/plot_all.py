@@ -181,15 +181,15 @@ def plot_all(
     "cms_label_cfg": dict,
 
     :param plot_config: Dictionary that defines which plot methods will be called with which
-        key word arguments.
+    key word arguments.
     :param style_config: Dictionary that defines arguments on how to style the overall plot.
     :param skip_ratio: Optional bool parameter to not display the ratio plot.
     :param skip_legend: Optional bool parameter to not display the legend.
     :param cms_label: Optional string parameter to set the CMS label text.
     :param whitespace_fraction: Optional float parameter that defines the ratio of which
-        the plot will consist of whitespace for the legend and labels
+    the plot will consist of whitespace for the legend and labels
     :param magnitudes: Optional float parameter that defines the displayed ymin when plotting
-        with a logarithmic scale.
+    with a logarithmic scale.
     :return: tuple of plot figure and axes
     """
     # available plot methods mapped to their names
@@ -207,7 +207,8 @@ def plot_all(
     else:
         fig, ax = plt.subplots()
         axs = (ax,)
-
+    total_events = kwargs["total_events"]
+    total_variance = kwargs["total_variance"]
     for key, cfg in plot_config.items():
         if "method" not in cfg:
             raise ValueError(f"no method given in plot_cfg entry {key}")
@@ -241,7 +242,7 @@ def plot_all(
     # prioritize style_config ax settings
     ax_kwargs.update(style_config.get("ax_cfg", {}))
 
-    # ax configs that can not be handled by `ax.set`
+    # ax configs that can not be handled by ax.set
     minorxticks = ax_kwargs.pop("minorxticks", None)
     minoryticks = ax_kwargs.pop("minoryticks", None)
 
@@ -275,7 +276,8 @@ def plot_all(
         legend_kwargs = {
             "ncol": 2,
             "loc": "center left",
-            "bbox_to_anchor": (0.35, 0.8),  # Position the legend outside the plot
+            "bbox_to_anchor": (0.25, 0.8),  # Position the legend outside the plot
+          
                                          # Moves the legend to the right side of the plot.
                                          # The first value (1) controls the horizontal position,
                                          # and the second value (0.95) controls the vertical position.
@@ -286,31 +288,41 @@ def plot_all(
 
         # retrieve the legend handles and their labels
         handles, labels = ax.get_legend_handles_labels()
+        
+        keywords_to_labels = {
+            'dy_lep'     : '$Z \\rightarrow ll$',
+            'dy_z2tautau': '$Z \\rightarrow \\tau\\tau$+jet fakes',
+            'dy_z2mumu'  : '$Z \\rightarrow \\mu\\mu$',
+            'dy_z2ee'    : '$Z \\rightarrow ee$',
+            'vv'         : 'Di-Boson',
+            'tt'         : '$t\\bar{t}$ + Jets',
+            'st'         : 'Single $t$/$\\bar{t}$',
+            'wj'         : 'W + jets',
+            'qcd'        : 'QCD',
+            'data'       : 'Data',
+        }
 
-        # custom argument: entries_per_column
-        n_cols = legend_kwargs.get("ncols", 1)
-        entries_per_col = legend_kwargs.pop("entries_per_column", None)
-        if callable(entries_per_col):
-            entries_per_col = entries_per_col(ax, handles, labels, n_cols)
-        if entries_per_col and n_cols > 1:
-            if isinstance(entries_per_col, (list, tuple)):
-                assert len(entries_per_col) == n_cols
-            else:
-                entries_per_col = [entries_per_col] * n_cols
-            # fill handles and labels with empty entries
-            max_entries = max(entries_per_col)
-            empty_handle = ax.plot([], label="", linestyle="None")[0]
-            for i, n in enumerate(entries_per_col):
-                for _ in range(max_entries - min(n, len(handles) - sum(entries_per_col[:i]))):
-                    handles.insert(i * max_entries + n, empty_handle)
-                    labels.insert(i * max_entries + n, "")
+        # Create process_to_label dynamically based on matching
+        process_to_label = {
+            process.name: keywords_to_labels.get(process.name, "Unknown")
+            for process in total_events.keys()
+        }
 
-        # custom hook to adjust handles and labels
-        update_handles_labels = legend_kwargs.pop("update_handles_labels", None)
-        if callable(update_handles_labels):
-            update_handles_labels(ax, handles, labels, n_cols)
-
-        # assume all `StepPatch` objects are part of MC stack
+        # Construct the updated labels
+        updated_labels = []
+        for label in labels:
+            matched = False
+            for process, yield_value in total_events.items():
+                variance_value = total_variance.get(process, 0)  # Get variance, default to 0 if not found
+                if process_to_label.get(process.name) == label:
+                    updated_labels.append(f"{label} ({yield_value:.0f} ± {variance_value:.0f})")
+                    matched = True
+                    break
+            if not matched:
+                # If no match is found, keep the original label
+                updated_labels.append(label)
+   
+        # assume all StepPatch objects are part of MC stack
         in_stack = [
             isinstance(handle, mpl.patches.StepPatch)
             for handle in handles
@@ -318,16 +330,16 @@ def plot_all(
 
         # reverse order of entries that are part of the stack
         if any(in_stack):
-            def revere_entries(entries, mask):
+            def shuffle(entries, mask):
                 entries = np.array(entries, dtype=object)
                 entries[mask] = entries[mask][::-1]
                 return list(entries)
 
-            handles = revere_entries(handles, in_stack)
-            labels = revere_entries(labels, in_stack)
+            handles = shuffle(handles, in_stack)
+            updated_labels = shuffle(updated_labels, in_stack)
 
         # make legend using ordered handles/labels
-        ax.legend(handles, labels, **legend_kwargs)
+        ax.legend(handles, updated_labels, **legend_kwargs)
 
     # custom annotation
     log_x = style_config.get("ax_cfg", {}).get("xscale", "linear") == "log"
@@ -353,6 +365,6 @@ def plot_all(
         cms_label_kwargs.update(style_config.get("cms_label_cfg", {}))
         mplhep.cms.label(**cms_label_kwargs)
 
-    fig.tight_layout()
+    plt.tight_layout()
 
     return fig, axs
