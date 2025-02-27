@@ -316,7 +316,7 @@ def plot_shifted_variable(
     default_style_config = prepare_style_config(
         config_inst, category_inst, variable_inst, density, shape_norm, yscale,
     )
-    default_style_config["rax_cfg"]["ylim"] = (0.25, 1.75)
+    default_style_config["rax_cfg"]["ylim"] = (0.75, 1.25)
     default_style_config["rax_cfg"]["ylabel"] = "Ratio"
     if legend_title:
         default_style_config["legend_cfg"]["title"] = legend_title

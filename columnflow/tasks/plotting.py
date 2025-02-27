@@ -149,14 +149,18 @@ class PlotVariablesBase(
                     "  - requested variable requires columns that were missing during histogramming\n"
                     "  - selected --processes did not match any value on the process axis of the input histogram",
                 )
-            
-            if 'sr' in category_inst.name:
-                hists = self.invoke_hist_hooks(hists)
+            if category_inst.aux: #Assume that aux exists only for signal regions since it contains the information about application and determination regions
+                if self.hist_hooks:
+                    hists = self.invoke_hist_hooks(hists,category_inst)
+                else:
+                    hists = hists[category_inst.name]
             else:
                 if category_inst.name in hists.keys():
                     hists = hists[category_inst.name]
                 else:
-                    hists[list(hists.keys())[0]]
+                    raise Exception(
+                    f"no histograms found to plot for {category_inst.name}"
+                )
 
             # add new processes to the end of the list
             for process_inst in hists:
@@ -169,11 +173,6 @@ class PlotVariablesBase(
                 h = hists[process_inst]
                 # selections
                 h = h[{
-                    "category": [
-                        hist.loc(c.id)
-                        for c in leaf_category_insts
-                        if c.id in h.axes["category"]
-                    ],
                     "shift": [
                         hist.loc(s.id)
                         for s in plot_shifts
@@ -181,11 +180,9 @@ class PlotVariablesBase(
                     ],
                 }]
                 # reductions
-                h = h[{"category": sum}]
                 # store
                 _hists[process_inst] = h
             hists = _hists
-
             # call the plot function
             fig, _ = self.call_plot_func(
                 self.plot_function,

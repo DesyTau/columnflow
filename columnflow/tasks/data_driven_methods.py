@@ -425,12 +425,14 @@ class ComputeFakeFactors(
                 mask = h1d.values() > 0
                 y = h1d.values()[mask]
                 y_err = (h1d.variances()[mask])**0.5
-                x = h1d.axes[0].centers[mask]
-                popt, pcov = curve_fit(fitf,x,y,
+                x = h1d.axes[0].centers
+                x_masked = x[mask]
+                
+                popt, pcov = curve_fit(fitf,x_masked,y,
                                        sigma=y_err,
                                        absolute_sigma=True,
                                        )
-                fitres['chi2'][dm] = sum(((y - fitf(x, *popt))/y_err)**2)
+                fitres['chi2'][dm] = sum(((y - fitf(x_masked, *popt))/y_err)**2)
                 fitres['ndf'][dm] = len(y) - len(popt)
                 fitres['popt'][dm] = popt 
                 fitres['pcov'][dm] = pcov
