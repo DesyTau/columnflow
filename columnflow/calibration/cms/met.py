@@ -13,8 +13,10 @@ ak = maybe_import("awkward")
 
 
 @calibrator(
+
     uses={"run", "PV.npvs", "PuppiMET.pt", "PuppiMET.phi"},
     produces={"PuppiMET.pt", "PuppiMET.phi"},
+
     # function to determine the correction file
     get_met_file=(lambda self, external_files: external_files.met_phi_corr),
     # function to determine met correction config
@@ -53,6 +55,7 @@ def met_phi(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
     met = events[self.met_name]
 
     # copy the intial pt and phi values
+
     corr_pt = np.array(events.PuppiMET.pt, dtype=np.float32)
     corr_phi = np.array(events.PuppiMET.phi, dtype=np.float32)
 
@@ -74,6 +77,7 @@ def met_phi(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
     # save the corrected values
     events = set_ak_column(events, "PuppiMET.pt", corr_pt, value_type=np.float32)
     events = set_ak_column(events, "PuppiMET.phi", corr_phi, value_type=np.float32)
+
 
     return events
 

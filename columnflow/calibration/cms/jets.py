@@ -252,9 +252,11 @@ def get_jec_config_default(self: Calibrator) -> DotDict:
     uncertainty_sources=None,
     # toggle for propagation to PuppiMET
     propagate_met=True,
+
     # # function to determine the correction file
     get_jec_file=get_jec_file_default,
     # # function to determine the jec configuration dict
+
     get_jec_config=get_jec_config_default,
 )
 
@@ -332,10 +334,12 @@ def jec(
         :py:func:`~columnflow.calibration.util.propagate_met` for events where
         ``met.eta > *min_eta_met_prop*``.
     """ # noqa
+
     
     # calculate uncorrected pt, mass
     events = set_ak_column_f32(events, "Jet.pt_raw", events.Jet.pt * (1 - events.Jet.rawFactor))
     events = set_ak_column_f32(events, "Jet.mass_raw", events.Jet.mass * (1 - events.Jet.rawFactor))
+
 
     # calculate uncorrected pt, mass
     events = set_ak_column_f32(events, f"{jet_name}.pt_raw", events[jet_name].pt * (1 - events[jet_name].rawFactor))
@@ -425,15 +429,19 @@ def jec(
         jetsum_pt_all_levels = jetsum.pt
         jetsum_phi_all_levels = jetsum.phi
 
+
         # propagate changes to PuppiMET, starting from jets corrected with subset of JEC levels
+
         # (recommendation is to propagate only L2 corrections and onwards)
         met_pt, met_phi = propagate_met(
             jetsum_pt_subset_type1_met,
             jetsum_phi_subset_type1_met,
             jetsum_pt_all_levels,
             jetsum_phi_all_levels,
+
             events.RawPuppiMET.pt,
             events.RawPuppiMET.phi,
+
         )
 
         events = set_ak_column_f32(events, "PuppiMET.pt", met_pt)
@@ -517,12 +525,14 @@ def jec_init(self: Calibrator) -> None:
 
     # add PuppiMET variables
     if self.propagate_met:
+
         self.uses |= {"RawPuppiMET.pt", "RawPuppiMET.phi","PuppiMET.pt", "PuppiMET.phi"}
         self.produces |= {"PuppiMET.pt", "PuppiMET.phi"}
 
         # add shifted PuppiMET variables
         self.produces |= {
             f"PuppiMET.{shifted_var}_jec_{junc_name}_{junc_dir}"
+
             for shifted_var in ("pt", "phi")
             for junc_name in sources
             for junc_dir in ("up", "down")
@@ -562,6 +572,7 @@ def jec_setup(self: Calibrator, reqs: dict, inputs: dict, reader_targets: Insert
     .. code-block:: python
 
         cfg.x.jec = DotDict.wrap({
+
             # campaign name for this JEC correctiono
             "campaign": f"Summer19UL{year2}{jerc_postfix}",
             # version of the corrections
@@ -581,6 +592,7 @@ def jec_setup(self: Calibrator, reqs: dict, inputs: dict, reader_targets: Insert
                 "CorrelationGroupFlavor",
                 "CorrelationGroupUncorrelated",
             ],
+
         })
 
     :param reqs: Requirement dictionary for this
@@ -894,8 +906,10 @@ def jer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
     if self.propagate_met:
 
         # save unsmeared quantities
+
         events = set_ak_column_f32(events, "PuppiMET.pt_unsmeared", events.PuppiMET.pt)
         events = set_ak_column_f32(events, "PuppiMET.phi_unsmeared", events.PuppiMET.phi)
+
 
         # get pt and phi of all jets after correcting
         jetsum = events[jet_name].sum(axis=1)
@@ -913,6 +927,7 @@ def jer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
         )
         events = set_ak_column_f32(events, "PuppiMET.pt", met_pt)
         events = set_ak_column_f32(events, "PuppiMET.phi", met_phi)
+
 
         # syst variations on top of corrected PuppiMET
         met_pt_up, met_phi_up = propagate_met(
@@ -936,6 +951,7 @@ def jer(self: Calibrator, events: ak.Array, **kwargs) -> ak.Array:
         events = set_ak_column_f32(events, "PuppiMET.phi_jer_up", met_phi_up)
         events = set_ak_column_f32(events, "PuppiMET.phi_jer_down", met_phi_down)
 
+
     return events
 
 
@@ -952,6 +968,7 @@ def jer_init(self: Calibrator) -> None:
         "PuppiMET.pt", "PuppiMET.phi", "PuppiMET.pt_jer_up", "PuppiMET.pt_jer_down", "PuppiMET.phi_jer_up",
         "PuppiMET.phi_jer_down", "PuppiMET.pt_unsmeared", "PuppiMET.phi_unsmeared",
     }
+
 
 
 @jer.requires
@@ -1042,7 +1059,9 @@ jer_ak8 = jer.derive("jer_ak8", cls_dict={"jet_name": "FatJet", "gen_jet_name": 
 @calibrator(
     uses={jec, jer},
     produces={jec, jer},
+
     # toggle for propagation to PuppiMET
+
     propagate_met=None,
     # functions to determine configs and files
     get_jec_file=None,
