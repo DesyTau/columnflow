@@ -155,13 +155,14 @@ class PlotVariablesBase(
                 else:
                     hists = hists[category_inst.name]
             else:
-                if category_inst.name in hists.keys():
+                if 'dr' in category_inst.name:
+                    hists = self.invoke_hist_hooks(hists,category_inst)
+                elif category_inst.name in hists.keys():
                     hists = hists[category_inst.name]
                 else:
                     raise Exception(
                     f"no histograms found to plot for {category_inst.name}"
                 )
-
             # add new processes to the end of the list
             for process_inst in hists:
                 if process_inst not in process_insts:
