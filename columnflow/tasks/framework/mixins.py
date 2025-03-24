@@ -2452,7 +2452,7 @@ class HistHookMixin(ConfigTask):
         Invoke hooks to update histograms before plotting.
         """
         if not self.hist_hooks:
-            return hists
+            return hists[category_inst.name]
 
         for hook in self.hist_hooks:
             if hook in (None, "", law.NO_STR):

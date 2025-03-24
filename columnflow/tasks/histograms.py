@@ -57,7 +57,7 @@ class CreateHistograms(
 
     @law.util.classproperty
     def mandatory_columns(cls) -> set[str]:
-        return set(cls.category_id_columns) | {"process_id"}
+        return set(cls.category_id_columns) | {"process_id", "ff_weight*"}
 
     def workflow_requires(self):
         reqs = super().workflow_requires()
@@ -142,7 +142,9 @@ class CreateHistograms(
         read_columns = {Route("process_id")}
         read_columns |= set(map(Route, self.category_id_columns))
         read_columns |= set(self.weight_producer_inst.used_columns)
-        read_columns |= set(map(Route, [n +'*' for n in self.config_inst.x.fake_factor_method.columns]))
+        read_columns |= set(map(Route, ['_'.join((the_name,the_shift)) 
+                                        for the_name in self.config_inst.x.fake_factor_method.columns
+                                        for the_shift in self.config_inst.x.fake_factor_method.shifts]))
         read_columns |= set(map(Route, aliases.values()))
         read_columns |= {
             Route(inp)
@@ -201,7 +203,6 @@ class CreateHistograms(
 
                 # attach coffea behavior aiding functional variable expressions
                 events = attach_coffea_behavior(events)
-                
                 # build the full event weight
                 if hasattr(self.weight_producer_inst, "skip_func") and not self.weight_producer_inst.skip_func():
                     events, weight = self.weight_producer_inst(events)
@@ -236,24 +237,18 @@ class CreateHistograms(
                             # mask events and weights when selection expressions are found
                             masked_events = events
                             
-                            if 'ar_wj' in region:
-                                masked_weights = weight * events.ff_weight_wj_nominal
-                            elif 'ar_qcd' in region:
-                                masked_weights = weight * events.ff_weight_qcd_nominal
+                            if 'apply_ff' in cat.aux.keys():
+                                if cat.aux['apply_ff'] == 'wj':
+                                    self.publish_message(f"applying FF weights: ff_weight_wj_nominal, category: {cat.name}")
+                                    masked_weights = weight * events.ff_weight_wj_nominal
+                                elif cat.aux['apply_ff'] == 'qcd':
+                                    self.publish_message(f"applying FF weights: ff_weight_qcd_nominal, category: {cat.name}")
+                                    masked_weights = weight * events.ff_weight_qcd_nominal
+                                else:
+                                    masked_weights = weight
                             else:
                                 masked_weights = weight
-                                
-                            # for variable_inst in variable_insts:
-                            #     sel = variable_inst.selection
-                            #     if sel == "1":
-                            #         continue
-                            #     if not callable(sel):
-                            #         raise ValueError(
-                            #             f"invalid selection '{sel}', for now only callables are supported",
-                            #         )
-                            #     mask = sel(masked_events)
-                            #     #select only one category per histogram
-                              # merge category ids
+                            
                             category_ids = ak.concatenate(
                                 [Route(c).apply(masked_events) for c in self.category_id_columns],
                                 axis=-1,
@@ -272,12 +267,15 @@ class CreateHistograms(
                                 expr = variable_inst.expression
                                 if isinstance(expr, str):
                                     route = Route(expr)
-                                    def expr(events, *args, **kwargs):
-                                        if len(events) == 0 and not has_ak_column(events, route):
+                                    def expr(masked_events, *args, **kwargs):
+                                        if len(masked_events) == 0 and not has_ak_column(masked_events, route):
                                             return empty_f32
-                                        return route.apply(events, null_value=variable_inst.null_value)
+                                        return route.apply(masked_events, null_value=variable_inst.null_value)
                                 # apply it
-                                fill_data[variable_inst.name] = expr(masked_events)
+                                if variable_inst.name == "event":
+                                    fill_data[variable_inst.name] = np.sign(masked_events.event)
+                                else:
+                                    fill_data[variable_inst.name] = expr(masked_events)
                             # fill it
                             fill_hist(
                                 histograms[cat.name][var_key],
