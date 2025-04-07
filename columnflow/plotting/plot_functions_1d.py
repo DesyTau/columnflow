@@ -56,6 +56,7 @@ def plot_variable_per_process(
     and the process with the second highest number of events last.
     Handles cases with only one or two processes.
     """ 
+
     remove_residual_axis(hists, "shift")
     # Define the color maps
     color_maps = {
@@ -94,7 +95,6 @@ def plot_variable_per_process(
         custom_order = sorted_keys 
     # Reorder histograms based on custom order
     sorted_hists = OrderedDict((key, sorted_hists_desc[key]) for key in custom_order)
-
     variable_inst = variable_insts[0]
     sorted_hists = apply_variable_settings(sorted_hists, variable_insts, variable_settings)
     sorted_hists = apply_process_settings(sorted_hists, process_settings)
@@ -276,7 +276,7 @@ def plot_shifted_variable(
     default_style_config = prepare_style_config(
         config_inst, category_inst, variable_inst, density, shape_norm, yscale,
     )
-    default_style_config["rax_cfg"]["ylim"] = (0.25, 1.75)
+    default_style_config["rax_cfg"]["ylim"] = (0.75, 1.25)
     default_style_config["rax_cfg"]["ylabel"] = "Ratio"
     default_style_config["legend_cfg"]["title"] = legend_title
 

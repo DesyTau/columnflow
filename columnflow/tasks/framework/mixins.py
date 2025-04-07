@@ -2447,12 +2447,12 @@ class HistHookMixin(ConfigTask):
         "default: empty",
     )
 
-    def invoke_hist_hooks(self, hists: dict) -> dict:
+    def invoke_hist_hooks(self, hists: dict, category_inst: od.Category) -> dict:
         """
         Invoke hooks to update histograms before plotting.
         """
         if not self.hist_hooks:
-            return hists
+            return hists[category_inst.name]
 
         for hook in self.hist_hooks:
             if hook in (None, "", law.NO_STR):
@@ -2470,7 +2470,7 @@ class HistHookMixin(ConfigTask):
 
             # invoke it
             self.publish_message(f"invoking hist hook '{hook}'")
-            hists = func(self, hists)
+            hists = func(self, hists, category_inst)
 
         return hists
 

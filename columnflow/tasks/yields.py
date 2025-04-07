@@ -21,6 +21,245 @@ from columnflow.tasks.histograms import MergeHistograms
 from columnflow.util import dev_sandbox, try_int
 
 
+# class CreateYieldTable(
+#     DatasetsProcessesMixin,
+#     CategoriesMixin,
+#     WeightProducerMixin,
+#     ProducersMixin,
+#     SelectorStepsMixin,
+#     CalibratorsMixin,
+#     law.LocalWorkflow,
+#     RemoteWorkflow,
+# ):
+#     sandbox = dev_sandbox(law.config.get("analysis", "default_columnar_sandbox"))
+
+#     table_format = luigi.Parameter(
+#         default="fancy_grid",
+#         significant=False,
+#         description="format of the yield table; accepts all formats of the tabulate package; "
+#         "default: fancy_grid",
+#     )
+#     number_format = luigi.Parameter(
+#         default="pdg",
+#         significant=False,
+#         description="rounding format of each number in the yield table; accepts all formats "
+#         "understood by scinum.Number.str(), e.g. 'pdg', 'publication', '%.1f' or an integer "
+#         "(number of signficant digits); default: pdg",
+#     )
+#     skip_uncertainties = luigi.BoolParameter(
+#         default=False,
+#         significant=False,
+#         description="when True, uncertainties are not displayed in the table; default: False",
+#     )
+#     normalize_yields = luigi.ChoiceParameter(
+#         choices=(law.NO_STR, "per_process", "per_category", "all"),
+#         default=law.NO_STR,
+#         significant=False,
+#         description="string parameter to define the normalization of the yields; "
+#         "choices: '', per_process, per_category, all; empty default",
+#     )
+#     output_suffix = luigi.Parameter(
+#         default=law.NO_STR,
+#         description="Adds a suffix to the output name of the yields table; empty default",
+#     )
+
+#     # upstream requirements
+#     reqs = Requirements(
+#         RemoteWorkflow.reqs,
+#         MergeHistograms=MergeHistograms,
+#     )
+
+#     # dummy branch map
+#     def create_branch_map(self):
+#         return [0]
+
+#     def requires(self):
+#         return {
+#             d: self.reqs.MergeHistograms.req(
+#                 self,
+#                 dataset=d,
+#                 variables=("event",),
+#                 _prefer_cli={"variables"},
+#             )
+#             for d in self.datasets
+#         }
+
+#     def workflow_requires(self):
+#         reqs = super().workflow_requires()
+
+#         reqs["merged_hists"] = [
+#             self.reqs.MergeHistograms.req(
+#                 self,
+#                 dataset=d,
+#                 variables=("event",),
+#                 _exclude={"branches"},
+#             )
+#             for d in self.datasets
+#         ]
+
+#         return reqs
+
+#     @classmethod
+#     def resolve_param_values(cls, params):
+#         params = super().resolve_param_values(params)
+
+#         if "number_format" in params and try_int(params["number_format"]):
+#             # convert 'number_format' in integer if possible
+#             params["number_format"] = int(params["number_format"])
+
+#         return params
+
+#     def output(self):
+#         suffix = ""
+#         if self.output_suffix and self.output_suffix != law.NO_STR:
+#             suffix = f"__{self.output_suffix}"
+
+#         return {
+#             "table": self.target(f"table__proc_{self.processes_repr}__cat_{self.categories_repr}{suffix}.txt"),
+#             "yields": self.target(f"yields__proc_{self.processes_repr}__cat_{self.categories_repr}{suffix}.json"),
+#         }
+
+#     @law.decorator.notify
+#     @law.decorator.log
+#     def run(self):
+#         import hist
+#         from tabulate import tabulate
+
+#         inputs = self.input()
+#         outputs = self.output()
+
+#         category_insts = list(map(self.config_inst.get_category, self.categories))
+#         process_insts = list(map(self.config_inst.get_process, self.processes))
+#         sub_process_insts = {
+#             proc: [sub for sub, _, _ in proc.walk_processes(include_self=True)]
+#             for proc in process_insts
+#         }
+
+#         # histogram data per process
+#         hists = {}
+
+#         with self.publish_step(f"Creating yields for processes {self.processes}, categories {self.categories}"):
+#             for dataset, inp in inputs.items():
+#                 dataset_inst = self.config_inst.get_dataset(dataset)
+
+#                 # load the histogram of the variable named "event"
+#                 input_hists = inp["hists"]["event"].load(formatter="pickle")
+
+#                 # loop and extract one histogram per process
+#                 for process_inst in process_insts:
+#                     # skip when the dataset is already known to not contain any sub process
+#                     if not any(map(dataset_inst.has_process, sub_process_insts[process_inst])):
+#                         continue
+
+#                     # work on a copy
+#                     h = h_in.copy()
+
+#                     # axis selections
+#                     h = h[{
+#                         "process": [
+#                             hist.loc(p.id)
+#                             for p in sub_process_insts[process_inst]
+#                             if p.id in h.axes["process"]
+#                         ],
+#                     }]
+
+#                     # axis reductions
+#                     h = h[{"process": sum, "shift": sum, "event": sum}]
+
+#                     # add the histogram
+#                     if process_inst in hists:
+#                         hists[process_inst] += h
+#                     else:
+#                         hists[process_inst] = h
+
+#             # there should be hists to plot
+#             if not hists:
+#                 raise Exception("no histograms found to plot")
+
+#             # sort hists by process order
+#             hists = OrderedDict(
+#                 (process_inst, hists[process_inst])
+#                 for process_inst in sorted(hists, key=process_insts.index)
+#             )
+
+#             yields, processes = defaultdict(list), []
+
+#             # read out yields per category and per process
+#             for process_inst, h in hists.items():
+#                 processes.append(process_inst)
+
+#                 for category_inst in category_insts:
+#                     leaf_category_insts = category_inst.get_leaf_categories() or [category_inst]
+
+#                     h_cat = h[{"category": [
+#                         hist.loc(c.id)
+#                         for c in leaf_category_insts
+#                         if c.id in h.axes["category"]
+#                     ]}]
+#                     h_cat = h_cat[{"category": sum}]
+
+#                     value = Number(h_cat.value)
+#                     if not self.skip_uncertainties:
+#                         # set a unique uncertainty name for correct propagation below
+#                         value.set_uncertainty(
+#                             f"mcstat_{process_inst.name}_{category_inst.name}",
+#                             math.sqrt(h_cat.variance),
+#                         )
+#                     yields[category_inst].append(value)
+
+#             # obtain normalizaton factors
+#             norm_factors = 1
+#             if self.normalize_yields == "all":
+#                 norm_factors = sum(
+#                     sum(category_yields)
+#                     for category_yields in yields.values()
+#                 )
+#             elif self.normalize_yields == "per_process":
+#                 norm_factors = [
+#                     sum(yields[category][i] for category in yields.keys())
+#                     for i in range(len(yields[category_insts[0]]))
+#                 ]
+#             elif self.normalize_yields == "per_category":
+#                 norm_factors = {
+#                     category: sum(category_yields)
+#                     for category, category_yields in yields.items()
+#                 }
+
+#             # initialize dicts
+#             yields_str = defaultdict(list, {"Process": [proc.label for proc in processes]})
+#             raw_yields = defaultdict(dict, {})
+
+#             # apply normalization and format
+#             for category, category_yields in yields.items():
+#                 for i, value in enumerate(category_yields):
+#                     # get correct norm factor per category and process
+#                     if self.normalize_yields == "per_process":
+#                         norm_factor = norm_factors[i]
+#                     elif self.normalize_yields == "per_category":
+#                         norm_factor = norm_factors[category]
+#                     else:
+#                         norm_factor = norm_factors
+
+#                     raw_yield = (value / norm_factor).nominal
+#                     raw_yields[category.name][processes[i].name] = raw_yield
+
+#                     # format yields into strings
+#                     yield_str = (value / norm_factor).str(
+#                         combine_uncs="all",
+#                         format=self.number_format,
+#                         style="latex" if "latex" in self.table_format else "plain",
+#                     )
+#                     if "latex" in self.table_format:
+#                         yield_str = f"${yield_str}$"
+#                     yields_str[category.label].append(yield_str)
+
+#             # create, print and save the yield table
+#             yield_table = tabulate(yields_str, headers="keys", tablefmt=self.table_format)
+#             self.publish_message(yield_table)
+
+#             outputs["table"].dump(yield_table, formatter="text")
+#             outputs["yields"].dump(raw_yields, formatter="json")
+            
 class CreateYieldTable(
     DatasetsProcessesMixin,
     CategoriesMixin,
@@ -136,123 +375,85 @@ class CreateYieldTable(
         }
 
         # histogram data per process
-        hists = {}
-
+        merged_hists = {}
         with self.publish_step(f"Creating yields for processes {self.processes}, categories {self.categories}"):
             for dataset, inp in inputs.items():
                 dataset_inst = self.config_inst.get_dataset(dataset)
 
                 # load the histogram of the variable named "event"
-                h_in = inp["hists"]["event"].load(formatter="pickle")
-
-                # loop and extract one histogram per process
-                for process_inst in process_insts:
-                    # skip when the dataset is already known to not contain any sub process
-                    if not any(map(dataset_inst.has_process, sub_process_insts[process_inst])):
-                        continue
-
-                    # work on a copy
-                    h = h_in.copy()
-
-                    # axis selections
-                    h = h[{
-                        "process": [
-                            hist.loc(p.id)
-                            for p in sub_process_insts[process_inst]
-                            if p.id in h.axes["process"]
-                        ],
-                    }]
-
-                    # axis reductions
-                    h = h[{"process": sum, "shift": sum, "event": sum}]
-
-                    # add the histogram
-                    if process_inst in hists:
-                        hists[process_inst] += h
+                input_hists = inp["hists"]["event"].load(formatter="pickle")
+                
+                
+                for the_cat, the_hist in input_hists.items():
+                    if the_cat not in merged_hists.keys():
+                        merged_hists[the_cat] = []
                     else:
-                        hists[process_inst] = h
-
+                        merged_hists[the_cat].append(the_hist)
+                #merge histograms
+            merged_hists_ = {the_cat: sum(h[1:],h[0].copy()) for the_cat, h in merged_hists.items()}
+            hists_per_proc = {} 
+            for the_cat, the_hist in merged_hists_.items():
+                hists_per_proc[the_cat] = {}
+                for proc in process_insts:
+                    leaf_procs = proc.get_leaf_processes()
+                    if len(leaf_procs) == 0 : leaf_procs = [proc]
+                    for leaf_proc in leaf_procs:
+                        if leaf_proc.id in the_hist.axes["process"]: 
+                            h = the_hist.copy()
+                            h = h[{"process": hist.loc(leaf_proc.id)}]
+                            
+                            if proc in hists_per_proc[the_cat]:
+                                hists_per_proc[the_cat][proc] +=h
+                            else:
+                                hists_per_proc[the_cat][proc] = h
+                                
             # there should be hists to plot
-            if not hists:
+            if not hists_per_proc:
                 raise Exception("no histograms found to plot")
-
             # sort hists by process order
-            hists = OrderedDict(
-                (process_inst, hists[process_inst])
-                for process_inst in sorted(hists, key=process_insts.index)
+            hists = {}
+            for the_cat in hists_per_proc.keys():
+                single_cat_hists = hists_per_proc[the_cat]
+                hists[the_cat] = OrderedDict(
+                (process_inst, single_cat_hists[process_inst])
+                for process_inst in sorted(single_cat_hists, key=process_insts.index)
             )
-
-            yields, processes = defaultdict(list), []
-
-            # read out yields per category and per process
-            for process_inst, h in hists.items():
-                processes.append(process_inst)
-
-                for category_inst in category_insts:
-                    leaf_category_insts = category_inst.get_leaf_categories() or [category_inst]
-
-                    h_cat = h[{"category": [
-                        hist.loc(c.id)
-                        for c in leaf_category_insts
-                        if c.id in h.axes["category"]
-                    ]}]
-                    h_cat = h_cat[{"category": sum}]
-
-                    value = Number(h_cat.value)
-                    if not self.skip_uncertainties:
+            #Calculate yields
+            yields = {}
+            for the_cat in hists.keys():
+                tmp = {}
+                for the_proc in hists[the_cat].keys():
+                    val = Number(hists[the_cat][the_proc].sum().value)
+                    
+                    if not self.skip_uncertainties and not the_proc.is_data:
                         # set a unique uncertainty name for correct propagation below
-                        value.set_uncertainty(
-                            f"mcstat_{process_inst.name}_{category_inst.name}",
-                            math.sqrt(h_cat.variance),
+                        val.set_uncertainty(
+                            f"mcstat_{the_proc.name}_{the_cat}",
+                            math.sqrt(hists[the_cat][the_proc].sum().variance),
                         )
-                    yields[category_inst].append(value)
-
-            # obtain normalizaton factors
-            norm_factors = 1
-            if self.normalize_yields == "all":
-                norm_factors = sum(
-                    sum(category_yields)
-                    for category_yields in yields.values()
-                )
-            elif self.normalize_yields == "per_process":
-                norm_factors = [
-                    sum(yields[category][i] for category in yields.keys())
-                    for i in range(len(yields[category_insts[0]]))
-                ]
-            elif self.normalize_yields == "per_category":
-                norm_factors = {
-                    category: sum(category_yields)
-                    for category, category_yields in yields.items()
-                }
-
+                    tmp[the_proc]=val
+                yields[the_cat] = OrderedDict(tmp)
             # initialize dicts
-            yields_str = defaultdict(list, {"Process": [proc.label for proc in processes]})
+            yields_str = defaultdict(list, {"Process" : [proc.label for proc in process_insts]})
             raw_yields = defaultdict(dict, {})
-
             # apply normalization and format
-            for category, category_yields in yields.items():
-                for i, value in enumerate(category_yields):
-                    # get correct norm factor per category and process
-                    if self.normalize_yields == "per_process":
-                        norm_factor = norm_factors[i]
-                    elif self.normalize_yields == "per_category":
-                        norm_factor = norm_factors[category]
-                    else:
-                        norm_factor = norm_factors
-
-                    raw_yield = (value / norm_factor).nominal
-                    raw_yields[category.name][processes[i].name] = raw_yield
-
-                    # format yields into strings
-                    yield_str = (value / norm_factor).str(
-                        combine_uncs="all",
-                        format=self.number_format,
-                        style="latex" if "latex" in self.table_format else "plain",
-                    )
+            for cat in yields.keys():
+                yields_per_cat = yields[cat]
+                for proc in process_insts:
+                    if proc in yields_per_cat:
+                        raw_yield = yields_per_cat[proc].nominal
+                        yield_str = (yields_per_cat[proc]).str(
+                            combine_uncs="all",
+                            format=self.number_format,
+                            style="latex" if "latex" in self.table_format else "plain",
+                        )
+                    else: 
+                        raw_yield = Number(-1).nominal
+                        yield_str = str(-1)
+                    raw_yields[cat][proc.name] = raw_yield
                     if "latex" in self.table_format:
                         yield_str = f"${yield_str}$"
-                    yields_str[category.label].append(yield_str)
-
+                    yields_str[cat].append(yield_str)
             # create, print and save the yield table
             yield_table = tabulate(yields_str, headers="keys", tablefmt=self.table_format)
             self.publish_message(yield_table)

@@ -276,7 +276,8 @@ def plot_all(
         legend_kwargs = {
             "ncol": 2,
             "loc": "center left",
-            "bbox_to_anchor": (0.25, 0.8),  # Position the legend outside the plot
+
+            "bbox_to_anchor": (0.35, 0.8),  # Position the legend outside the plot
                                          # Moves the legend to the right side of the plot.
                                          # The first value (1) controls the horizontal position,
                                          # and the second value (0.95) controls the vertical position.

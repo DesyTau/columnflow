@@ -74,8 +74,12 @@ def fill_hist(
             flat_np_view(data[ax.name])[right_egde_mask] -= ax.widths[-1] * 1e-5
 
     # fill
-    arrays = ak.flatten(ak.cartesian(data))
-    h.fill(**fill_kwargs, **{field: arrays[field] for field in arrays.fields})
+    flat_data = {}
+    for key, arr in data.items():
+        if arr.ndim != 1: flat_data[key] = ak.flatten(arr)
+        else: flat_data[key] = arr
+    h.fill(**fill_kwargs, **flat_data)
+     
 
 
 def add_hist_axis(histogram: hist.Hist, variable_inst: od.Variable) -> hist.Hist:

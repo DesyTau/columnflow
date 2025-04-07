@@ -22,7 +22,7 @@ logger = law.logger.get_logger(__name__)
 
 @selector(
     uses={
-        "Jet.{pt,eta,phi,mass,jetId,chEmEF}", optional("Jet.puId"),
+        "Jet.{pt,eta,phi,mass,jetId,chEmEF}", 
         "Muon.{pt,eta,phi,mass,isPFcand}",
     },
     produces={"Jet.veto_map_mask"},

@@ -22,7 +22,6 @@ from columnflow.tasks.ml import MLEvaluation
 from columnflow.util import dev_sandbox
 from columnflow.hist_util import create_hist_from_variables
 
-
 class CreateHistograms(
     VariablesMixin,
     WeightProducerMixin,
@@ -58,7 +57,7 @@ class CreateHistograms(
 
     @law.util.classproperty
     def mandatory_columns(cls) -> set[str]:
-        return set(cls.category_id_columns) | {"process_id"}
+        return set(cls.category_id_columns) | {"process_id", "ff_weight*"}
 
     def workflow_requires(self):
         reqs = super().workflow_requires()
@@ -143,6 +142,9 @@ class CreateHistograms(
         read_columns = {Route("process_id")}
         read_columns |= set(map(Route, self.category_id_columns))
         read_columns |= set(self.weight_producer_inst.used_columns)
+        read_columns |= set(map(Route, ['_'.join((the_name,the_shift)) 
+                                        for the_name in self.config_inst.x.fake_factor_method.columns
+                                        for the_shift in self.config_inst.x.fake_factor_method.shifts]))
         read_columns |= set(map(Route, aliases.values()))
         read_columns |= {
             Route(inp)
@@ -201,72 +203,85 @@ class CreateHistograms(
 
                 # attach coffea behavior aiding functional variable expressions
                 events = attach_coffea_behavior(events)
-
                 # build the full event weight
                 if hasattr(self.weight_producer_inst, "skip_func") and not self.weight_producer_inst.skip_func():
                     events, weight = self.weight_producer_inst(events)
                 else:
                     weight = ak.Array(np.ones(len(events), dtype=np.float32))
 
+                categories = self.config_inst.categories.names()
+                sr_names = [the_cat for the_cat in categories if 'sr' in the_cat]
                 # define and fill histograms, taking into account multiple axes
-                for var_key, var_names in self.variable_tuples.items():
-                    # get variable instances
-                    variable_insts = [self.config_inst.get_variable(var_name) for var_name in var_names]
-
-                    if var_key not in histograms:
-                        # create the histogram in the first chunk
-                        histograms[var_key] = create_hist_from_variables(
-                            *variable_insts,
-                            int_cat_axes=("category", "process", "shift"),
-                        )
-
-                    # mask events and weights when selection expressions are found
-                    masked_events = events
-                    masked_weights = weight
-                    for variable_inst in variable_insts:
-                        sel = variable_inst.selection
-                        if sel == "1":
-                            continue
-                        if not callable(sel):
-                            raise ValueError(
-                                f"invalid selection '{sel}', for now only callables are supported",
+                for sr_name in sr_names:
+                    #iterate over the regions needed for calculation of the ff_method
+                    the_sr = self.config_inst.get_category(sr_name)
+                    regions = [sr_name]
+                    if the_sr.aux:
+                        for the_key in the_sr.aux.keys():
+                            if (the_key == 'abcd_regs') or (the_key == 'ff_regs'):
+                                regions += list(the_sr.aux[the_key].values())
+                    for region in regions: 
+                        #by accessing the list of categories we check if the category with this name exists
+                        cat = self.config_inst.get_category(region)
+                        if cat.name not in histograms.keys(): histograms[cat.name] = {}
+                        for var_key, var_names in self.variable_tuples.items():
+                            # get variable instances
+                            variable_insts = [self.config_inst.get_variable(var_name) for var_name in var_names]
+                    
+                            if var_key not in histograms[cat.name].keys():
+                                # create the histogram in the first chunk
+                                histograms[cat.name][var_key] = create_hist_from_variables(
+                                    *variable_insts,
+                                    int_cat_axes=("process", "shift"),
+                                )
+                            # mask events and weights when selection expressions are found
+                            masked_events = events
+                            
+                            if 'apply_ff' in cat.aux.keys():
+                                if cat.aux['apply_ff'] == 'wj':
+                                    self.publish_message(f"applying FF weights: ff_weight_wj_nominal, category: {cat.name}")
+                                    masked_weights = weight * events.ff_weight_wj_nominal
+                                elif cat.aux['apply_ff'] == 'qcd':
+                                    self.publish_message(f"applying FF weights: ff_weight_qcd_nominal, category: {cat.name}")
+                                    masked_weights = weight * events.ff_weight_qcd_nominal
+                                else:
+                                    masked_weights = weight
+                            else:
+                                masked_weights = weight
+                            
+                            category_ids = ak.concatenate(
+                                [Route(c).apply(masked_events) for c in self.category_id_columns],
+                                axis=-1,
                             )
-                        mask = sel(masked_events)
-                        masked_events = masked_events[mask]
-                        masked_weights = masked_weights[mask]
-
-                    # merge category ids
-                    category_ids = ak.concatenate(
-                        [Route(c).apply(masked_events) for c in self.category_id_columns],
-                        axis=-1,
-                    )
-
-                    # broadcast arrays so that each event can be filled for all its categories
-                    fill_data = {
-                        "category": category_ids,
-                        "process": masked_events.process_id,
-                        "shift": np.ones(len(masked_events), dtype=np.int32) * self.global_shift_inst.id,
-                        "weight": masked_weights,
-                    }
-                    for variable_inst in variable_insts:
-                        # prepare the expression
-                        expr = variable_inst.expression
-                        if isinstance(expr, str):
-                            route = Route(expr)
-                            def expr(events, *args, **kwargs):
-                                if len(events) == 0 and not has_ak_column(events, route):
-                                    return empty_f32
-                                return route.apply(events, null_value=variable_inst.null_value)
-                        # apply it
-                        fill_data[variable_inst.name] = expr(masked_events)
-
-                    # fill it
-                    fill_hist(
-                        histograms[var_key],
-                        fill_data,
-                        last_edge_inclusive=self.last_edge_inclusive,
-                    )
-
+                            mask = ak.any(category_ids == cat.id, axis = 1)
+                            masked_events = masked_events[mask]
+                            masked_weights = masked_weights[mask]
+                            # broadcast arrays so that each event can be filled for all its categories
+                            fill_data = {
+                                "process": masked_events.process_id,
+                                "shift": np.ones(len(masked_events), dtype=np.int32) * self.global_shift_inst.id,
+                                "weight": masked_weights,
+                            }
+                            for variable_inst in variable_insts:
+                                # prepare the expression
+                                expr = variable_inst.expression
+                                if isinstance(expr, str):
+                                    route = Route(expr)
+                                    def expr(masked_events, *args, **kwargs):
+                                        if len(masked_events) == 0 and not has_ak_column(masked_events, route):
+                                            return empty_f32
+                                        return route.apply(masked_events, null_value=variable_inst.null_value)
+                                # apply it
+                                if variable_inst.name == "event":
+                                    fill_data[variable_inst.name] = np.sign(masked_events.event)
+                                else:
+                                    fill_data[variable_inst.name] = expr(masked_events)
+                            # fill it
+                            fill_hist(
+                                histograms[cat.name][var_key],
+                                fill_data,
+                                last_edge_inclusive=self.last_edge_inclusive,
+                            )
         # merge output files
         self.output()["hists"].dump(histograms, formatter="pickle")
 
@@ -383,20 +398,20 @@ class MergeHistograms(
             inp["hists"].load(formatter="pickle")
             for inp in self.iter_progress(inputs.targets.values(), len(inputs), reach=(0, 50))
         ]
-
+        cats = list(hists[0].keys())
+        variable_names = list(hists[0][cats[0]].keys())
+        get_hists = lambda hists, cat, var : [h[cat][var] for h in hists]
         # create a separate file per output variable
-        variable_names = list(hists[0].keys())
         for variable_name in self.iter_progress(variable_names, len(variable_names), reach=(50, 100)):
-            self.publish_message(f"merging histograms for '{variable_name}'")
-
-            variable_hists = [h[variable_name] for h in hists]
-            merged = sum(variable_hists[1:], variable_hists[0].copy())
-            outputs["hists"][variable_name].dump(merged, formatter="pickle")
-
+            merged_hists = {}
+            for the_cat in cats:
+                self.publish_message(f"merging histograms for {variable_name}, category: {the_cat}")
+                variable_hists  = get_hists(hists, the_cat, variable_name)
+                merged_hists[the_cat] = sum(variable_hists[1:], variable_hists[0].copy())
+            outputs["hists"][variable_name].dump(merged_hists, formatter="pickle")
         # optionally remove inputs
         if self.remove_previous:
             inputs.remove()
-
 
 MergeHistogramsWrapper = wrapper_factory(
     base_cls=AnalysisTask,
@@ -474,13 +489,18 @@ class MergeShiftedHistograms(
             self.publish_message(f"merging histograms for '{variable_name}'")
 
             # load hists
+           
+            
             variable_hists = [
                 coll["hists"].targets[variable_name].load(formatter="pickle")
                 for coll in inputs.values()
             ]
-
-            # merge and write the output
-            merged = sum(variable_hists[1:], variable_hists[0].copy())
+            merged = {}
+            get_hists = lambda hists, cat : [h[cat] for h in hists]
+            for the_cat in variable_hists[0].keys():
+                single_cat_hists = get_hists(variable_hists, the_cat)
+                merged[the_cat] = sum(single_cat_hists[1:], single_cat_hists[0].copy())
+            
             outp.dump(merged, formatter="pickle")
 
 

@@ -339,21 +339,20 @@ def normalization_weights_setup(
         )
 
         for process_id, br in branching_ratios.items():
-            
             #sum_weights = merged_selection_stats["sum_mc_weight_per_process"][str(process_id)]
             sum_weights = self.dataset_inst.n_events
             process_weight_table[0, process_id] = lumi * inclusive_xsec * br / sum_weights
-
     else:
         # fill the process weight table with per-process cross sections
         for process_inst in process_insts:
             if self.config_inst.campaign.ecm not in process_inst.xsecs.keys():
-
-                continue
+                raise KeyError(
+                    f"no cross section registered for process {process_inst} for center-of-mass "
+                    f"energy of {self.config_inst.campaign.ecm}",
+                )
             #sum_weights = merged_selection_stats["sum_mc_weight_per_process"][str(process_inst.id)]
             #quick fix that need to be fixed
             ################################
-            #n_evt_per_file = /self.dataset_inst.n_files
             sum_weights = self.dataset_inst.n_events
             ################################
             xsec = process_inst.get_xsec(self.config_inst.campaign.ecm).nominal
@@ -402,3 +401,5 @@ stitched_normalization_weights_brs_from_processes = stitched_normalization_weigh
         "get_xsecs_from_inclusive_dataset": False,
     },
 )
+
+

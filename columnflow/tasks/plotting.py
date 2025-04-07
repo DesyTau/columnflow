@@ -111,44 +111,58 @@ class PlotVariablesBase(
             for dataset, inp in self.input().items():
                 dataset_inst = self.config_inst.get_dataset(dataset)
                 h_in = inp["collection"][0]["hists"].targets[self.branch_data.variable].load(formatter="pickle")
-
+               
                 # loop and extract one histogram per process
-                for process_inst in process_insts:
-                    # skip when the dataset is already known to not contain any sub process
-                    if not any(
-                        dataset_inst.has_process(sub_process_inst.name)
-                        for sub_process_inst in sub_process_insts[process_inst]
-                    ):
-                        continue
+                for region in h_in.keys():
+                    if region not in hists: hists[region] = {}
+                    for process_inst in process_insts:
+                        # skip when the dataset is already known to not contain any sub process
+                        if not any(
+                            dataset_inst.has_process(sub_process_inst.name)
+                            for sub_process_inst in sub_process_insts[process_inst]
+                        ):
+                            continue
 
-                    # select processes and reduce axis
-                    h = h_in.copy()
-                    h = h[{
-                        "process": [
-                            hist.loc(p.id)
-                            for p in sub_process_insts[process_inst]
-                            if p.id in h.axes["process"]
-                        ],
-                    }]
-                    h = h[{"process": sum}]
+                        # select processes and reduce axis
+                        h = h_in[region].copy()
+                        h = h[{
+                            "process": [
+                                hist.loc(p.id)
+                                for p in sub_process_insts[process_inst]
+                                if p.id in h.axes["process"]
+                            ],
+                        }]
+                        h = h[{"process": sum}]
 
-                    # add the histogram
-                    if process_inst in hists:
-                        hists[process_inst] += h
-                    else:
-                        hists[process_inst] = h
-
+                        # add the histogram
+                        if process_inst in hists[region]:
+                            hists[region][process_inst] += h
+                        else:
+                            hists[region][process_inst] = h
+            
+           
             # there should be hists to plot
+            
             if not hists:
                 raise Exception(
                     "no histograms found to plot; possible reasons:\n"
                     "  - requested variable requires columns that were missing during histogramming\n"
                     "  - selected --processes did not match any value on the process axis of the input histogram",
                 )
-
-            # update histograms using custom hooks
-            hists = self.invoke_hist_hooks(hists)
-
+            if category_inst.aux: #Assume that aux exists only for signal regions since it contains the information about application and determination regions
+                if self.hist_hooks:
+                    hists = self.invoke_hist_hooks(hists,category_inst)
+                else:
+                    hists = hists[category_inst.name]
+            else:
+                if 'dr' in category_inst.name:
+                    hists = self.invoke_hist_hooks(hists,category_inst)
+                elif category_inst.name in hists.keys():
+                    hists = hists[category_inst.name]
+                else:
+                    raise Exception(
+                    f"no histograms found to plot for {category_inst.name}"
+                )
             # add new processes to the end of the list
             for process_inst in hists:
                 if process_inst not in process_insts:
@@ -160,11 +174,6 @@ class PlotVariablesBase(
                 h = hists[process_inst]
                 # selections
                 h = h[{
-                    "category": [
-                        hist.loc(c.id)
-                        for c in leaf_category_insts
-                        if c.id in h.axes["category"]
-                    ],
                     "shift": [
                         hist.loc(s.id)
                         for s in plot_shifts
@@ -172,11 +181,9 @@ class PlotVariablesBase(
                     ],
                 }]
                 # reductions
-                h = h[{"category": sum}]
                 # store
                 _hists[process_inst] = h
             hists = _hists
-
             # call the plot function
             fig, _ = self.call_plot_func(
                 self.plot_function,
