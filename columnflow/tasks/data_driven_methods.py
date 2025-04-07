@@ -372,24 +372,11 @@ MergeFakeFactorHistogramsWrapper = wrapper_factory(
     enable=["configs", "skip_configs", "datasets", "skip_datasets", "shifts", "skip_shifts"],
 )
 
-
-class dict_creator():
-    def init_dict(self, ax_list):
-        if not ax_list:
-            return -1.
-        else:
-            ax = ax_list[0]
-            updated_ax = ax_list[1:]
-            get_ax_dict = lambda ax, ax_list, func : {ax.bin(i): func(ax_list) for i in range(ax.size)}
-            return get_ax_dict(ax,updated_ax, self.init_dict)
-                
-
 class ComputeFakeFactors(
     DatasetsProcessesMixin,
     CategoriesMixin,
     WeightProducerMixin,
     ProducersMixin,
-    dict_creator,
 ):
     sandbox = dev_sandbox(law.config.get("analysis", "default_columnar_sandbox"))
 
@@ -456,7 +443,12 @@ class ComputeFakeFactors(
                                       str(nj))): self.target(f"fake_factor_{ff_type}_PNet_dm_{str(dm)}_njets_{str(nj)}.png")
                           for ff_type in ['qcd','wj']
                           for dm in [0,1,2,10,11]
-                          for nj in [0,1,2]}}
+                          for nj in [0,1,2]},
+                "fitres": self.target('_'.join(('fitres',
+                                                 channel,
+                                                 str(year),
+                                                 tag)) + '.json'),
+                }
 
     @law.decorator.log
     def run(self):
@@ -466,6 +458,7 @@ class ComputeFakeFactors(
         from scipy.special import erf
         import matplotlib.pyplot as plt
         import correctionlib.schemav2 as cs
+        from numpy import exp
         plt.figure(dpi=200)
         plt.rcParams.update({
             "text.usetex": True,
@@ -510,6 +503,15 @@ class ComputeFakeFactors(
                         if proc.is_data:
                             if the_cat in data_hists: data_hists[the_cat] += h
                             else: data_hists[the_cat] = h
+        
+        def eval_formula(formula_str, popt,make_rounding=False):
+                for i,p in enumerate(popt):
+                    if make_rounding:
+                        formula_str = formula_str.replace(f'p{i}', '{:.3e}'.format(p))
+                    else:
+                        formula_str = formula_str.replace(f'p{i}',str(p))
+                return formula_str
+        
         #Function that performs the calculation of t
         def get_ff_corr(self, h_data, h_mc, dr_num, dr_den, name='ff_hist', label='ff_hist'):
             
@@ -529,6 +531,7 @@ class ComputeFakeFactors(
                     print(f"mc_num: {mc_num[{'tau_dm_pnet': hist.loc(dm), 'n_jets': hist.loc(nj)}].values()}")
                     print(f"mc_den: {mc_den[{'tau_dm_pnet': hist.loc(dm), 'n_jets': hist.loc(nj)}].values()}")
             num = data_num.values() - mc_num.values()
+
             den = data_den.values() - mc_den.values()
             ff_val = np.where((num > 0) & (den > 0),
                                num / np.maximum(den, 1),
@@ -538,7 +541,7 @@ class ComputeFakeFactors(
             
             ff_err = ff_val * ((data_num.variances() + mc_num.variances())**0.5 / np.abs(num) + (data_den.variances() + mc_den.variances())**0.5 / np.abs(den))
             
-            
+            ff_err[ff_val < 0] = 1
             h = hist.Hist.new
             for (var_name, var_axis) in self.config_inst.x.fake_factor_method.axes.items(): 
                 h = eval(f'h.{var_axis.ax_str}') 
@@ -550,45 +553,54 @@ class ComputeFakeFactors(
             ff_raw.name = name + '_raw'
             ff_raw.label = label + '_raw'
             
-            #Make an approximation of tau pt dependance
-            formula_str = 'p0 + p1*x+p2*x*x'
-            #formula_str = 'p0 + p1*x'
-            def fitf(x, p0, p1, p2):
-                return eval(formula_str)
-            
-            def jac(x):
-                from numpy import array
-                out = array([[ 1, x,  x**2],[x,  x**2, x**3],[x**2,  x**3, x**4]])
-                #out = array([[ 1., x],[x,  x**2]])
-                return out
-            
-            def eval_formula(formula_str, popt):
-                for i,p in enumerate(popt):
-                    par = round(popt[i],6)
-                    formula_str = formula_str.replace(f'p{i}',str(par))
-                return formula_str
+            def get_fitf(dm):
+                if dm==0:
+                    formula_str = 'p0+p1*x+p2*x*x'
+                    def fitf(x,p0,p1,p2): 
+                        return eval(formula_str)
+                else:
+                    formula_str = 'p0+p1*exp(-p2*x)'
+                    def fitf(x,p0,p1,p2): 
+                        from numpy import exp
+                        return eval(formula_str)
+                return fitf, formula_str
+         
+            def get_jac(dm):
+                if dm==0:
+                    def jac(x,p): 
+                        from numpy import array
+                        return array([ 1., x, x**2])
+                else:
+                    def jac(x,p):
+                        from numpy import array,exp,outer
+                        ders=array([ 1.,
+                                    exp(-p[2]*x),
+                                    -1*p[1]*x*exp(-p[2]*x)])
+                        return ders
+                return jac 
             
             ff_fitted = ff_raw.copy().reset()
             ff_fitted.name = name
             ff_fitted.label = label
             
-            
             fitres = {}
-            dc = dict_creator()
-            for the_field in ['chi2','ndf','popt', 'pcov', 'fitf_str','x_max']: 
-                fitres[the_field]= dc.init_dict(axes)
-            
             dm_axis = ff_raw.axes['tau_dm_pnet']
             n_jets_axis = ff_raw.axes['n_jets']
+            
             for nj in n_jets_axis:
+                if nj not in fitres.keys(): fitres[nj] = {}
                 for dm in dm_axis:
+                    if dm not in fitres[nj].keys(): fitres[nj][dm] = {}
+                    
+                 
+                        
+                    
                     h1d = ff_raw[{'tau_dm_pnet': hist.loc(dm),
                                    'n_jets': hist.loc(nj),
                                     'syst': hist.loc('nominal')}]
                     mask = h1d.values() > 0
                     x = h1d.axes[0].centers
-                    if np.sum(mask) < 3:
-                    #if np.sum(mask) < 2:
+                    if np.sum(mask) < 2:
                         y = np.zeros_like(x)
                         y_err = np.ones_like(x)
                         x_masked = x
@@ -596,27 +608,37 @@ class ComputeFakeFactors(
                         y = h1d.values()[mask]
                         y_err = (h1d.variances()[mask])**0.5
                         x_masked = x[mask]
-                    popt, pcov = curve_fit(fitf,
+                    
+                    fitf, formula_str = get_fitf(dm)
+                    if dm==0:
+                        the_bounds = ([-10,-5,-1],[10,5,1])
+                    else:
+                        the_bounds = ([-0.5, -1, 0],[0.5,1,0.1])
+                    popt, pcov, infodict, mesg, ier = curve_fit(fitf,
                                            x_masked,
                                            y,
                                            sigma=y_err,
+                                           bounds=the_bounds,
                                            absolute_sigma=True,
+                                           full_output=True
                                         )
-                    fitres['chi2'][dm][nj] = sum(((y - fitf(x_masked, *popt))/y_err)**2)
-                    fitres['ndf'][dm][nj] = len(y) - len(popt)
-                    fitres['popt'][dm][nj] = popt 
-                    fitres['pcov'][dm][nj] = pcov
-                    fitres['x_max'][dm][nj] = np.max(x_masked)
-                
-                    fitres['fitf_str'][dm][nj] = eval_formula(formula_str,popt)
+                    fitres[nj][dm]['chi2']      = sum((infodict['fvec'])**2)
+                    fitres[nj][dm]['ndf']       = len(y) - len(popt)
+                    fitres[nj][dm]['popt']      = popt 
+                    fitres[nj][dm]['pcov']      = pcov
+                    fitres[nj][dm]['x_max']     = np.max(x_masked)
+                   
+                    fitres[nj][dm]['jac']       = get_jac(dm)
+                    fitres[nj][dm]['name']      = name
+                    fitres[nj][dm]['fitf']      = fitf
+                    fitres[nj][dm]['fitf_str']  = formula_str
+                    
                     for c, shift_name in enumerate(['down', 'nominal', 'up']): # if down then c=-1, if up c=+1, nominal => c=0
                         ff_fitted.view().value[:,
                                             ff_fitted.axes[1].index(dm),
                                             ff_fitted.axes[2].index(nj),
                                             ff_fitted.axes[3].index(shift_name)] = fitf(x, *popt + (c-1) * np.sqrt(np.diag(pcov)))
-                fitres['name']  = name
-                fitres['jac']   = jac
-                fitres['fitf']  = fitf
+                        
             return ff_raw, ff_fitted, fitres
         
         wj_raw, wj_fitted, wj_fitres = get_ff_corr(self,
@@ -635,36 +657,36 @@ class ComputeFakeFactors(
                               name='ff_qcd',
                               label='Fake factor QCD')
         
-        corr_list = []
-
+        
         corr_list = []            
-        for fitres in [wj_fitres, qcd_fitres]:
-            formula_str = fitres['fitf_str']
-            dm_cats = []
-            for dm in formula_str.keys():
-                formula_str_njet_binned = formula_str[dm]
-                single_dm = []
-                for nj, the_formula in formula_str_njet_binned.items():
-                    x_max = fitres['x_max'][dm][nj]
-                    fx_max = np.maximum(fitres['fitf'](x_max,* fitres['popt'][dm][nj]),0)
-                    single_dm.append(cs.CategoryItem(
-                        key=nj,
+        for fitres_per_proc in [wj_fitres, qcd_fitres]:
+            nj_categories = []
+            for nj, fitres_per_nj in fitres_per_proc.items():
+                single_nj = []
+                for dm, fitres in fitres_per_nj.items():
+                    x_max = fitres['x_max']
+                    fitf = fitres['fitf']
+                    popt = fitres['popt']
+                    fitf_str = eval_formula(fitres['fitf_str'], popt)
+                    fx_max = np.maximum(fitf(x_max,*popt),0)
+                    single_nj.append(cs.CategoryItem(
+                        key=dm,
                         value=cs.Formula(
                             nodetype="formula",
                             variables=["tau_pt"],
                             parser="TFormula",
-                            expression=f'({the_formula})*((x-{x_max})<0) + ({fx_max})*((x-{x_max})>=0)',
+                            expression=f'({fitf_str})*((x-{x_max})<0) + ({fx_max})*((x-{x_max})>=0)',
                         )))
-                dm_cats.append(cs.CategoryItem(
-                        key=dm,
+                nj_categories.append(cs.CategoryItem(
+                        key=nj,
                         value=cs.Category(
                             nodetype="category",
-                            input="n_jets",
-                            content=single_dm,
+                            input="tau_dm_pnet",
+                            content=single_nj,
                             )))
             corr_list.append(cs.Correction(
-                name=fitres['name'],
-                description=f"fake factor correcton for {fitres['name'].split('_')[1]}",
+                name=fitres_per_proc[0][0]['name'],
+                description=f"fake factor correcton for {fitres_per_proc[0][0]['name'].split('_')[1]}",
                 version=2,
                 inputs=[
                     cs.Variable(name="tau_pt", type="real",description="pt of tau"),
@@ -674,11 +696,10 @@ class ComputeFakeFactors(
                 output=cs.Variable(name="weight", type="real", description="Multiplicative event weight"),
                 data=cs.Category(
                     nodetype="category",
-                    input="tau_dm_pnet",
-                    content=dm_cats,
+                    input="n_jets",
+                    content=nj_categories,
                 )
             ))
-        
         cset = cs.CorrectionSet(
         schema_version=2,
         description="Fake factors",
@@ -686,17 +707,25 @@ class ComputeFakeFactors(
         )
         self.output()['ff_json'].dump(cset.json(exclude_unset=True), formatter="json")
         
-        
+        chi2_string = 'type nj dm chi2 ndf,'
+        for fitres_per_proc in [wj_fitres, qcd_fitres]:
+            for dm, fitres_per_dm in fitres_per_proc.items():
+                for nj, fitres in fitres_per_dm.items():
+                    chi2_string += ' '.join((fitres['name'],
+                                             str(nj),
+                                             str(dm),
+                                             str(fitres['chi2']),
+                                             str(fitres['ndf'])))
+                    chi2_string += ','
+        self.output()['fitres'].dump(chi2_string, formatter="json")
         
         #Plot fake factors:
         for h_name in ['wj', 'qcd']:
-            h_raw = eval(f'{h_name}_raw')
-            h_fitted = eval(f'{h_name}_fitted')
-            
-           
-            fitres = wj_fitres if h_name == 'wj' else qcd_fitres
-            dm_axis = h_raw.axes['tau_dm_pnet']
-            nj_axis = h_raw.axes['n_jets']
+            h_raw       = eval(f'{h_name}_raw')
+            h_fitted    = eval(f'{h_name}_fitted')
+            fitres_dict = eval(f'{h_name}_fitres')
+            dm_axis     = h_raw.axes['tau_dm_pnet']
+            nj_axis     = h_raw.axes['n_jets']
             for nj in nj_axis:
                 print(f"Plotting 2d map for n jets = {nj}")
                 fig, ax = plt.subplots(figsize=(12, 8))
@@ -736,16 +765,17 @@ class ComputeFakeFactors(
                                     marker='o',
                                     fmt='o',
                                     line=None, color='#2478B7', capsize=4)
-                    x_fine = np.linspace(x[0],x[-1],num=100)
-                    popt = fitres['popt'][dm][nj]
-                    pcov = fitres['pcov'][dm][nj]
+                    x_fine = np.linspace(x[0],x[-1],num=30)
+                    fitres = fitres_dict[nj][dm]
+                    popt = fitres['popt']
+                    pcov = fitres['pcov']
                     jac = fitres['jac']
-                    def err(x,jac,pcov):
-                        from numpy import sqrt,einsum
-                        return sqrt(einsum('ij,ij',jac(x),pcov))
+                    def err(x,jac,pcov,popt):
+                        from numpy import sqrt,einsum,abs
+                        return sqrt(abs(einsum('i,ij,j',jac(x,popt).T,pcov,jac(x,popt))))
 
                     import functools
-                    err_y = list(map(functools.partial(err, jac=jac,pcov=pcov), x_fine))
+                    err_y = list(map(functools.partial(err, jac=jac,pcov=pcov,popt=popt), x_fine))
                     
                     y_fitf = fitres['fitf'](x_fine,*popt)
                     y_fitf_up = fitres['fitf'](x_fine,*popt) + err_y
@@ -757,14 +787,16 @@ class ComputeFakeFactors(
                     ax.fill_between(x_fine, y_fitf_up,  y_fitf_down, color='#83d55f', alpha=0.5)
                     ax.set_ylabel('Fake Factor')
                     ax.set_xlabel('Tau pT [GeV]')
-                    ax.set_title(f'Jet Fake Factors :Tau PNet Decay Mode {(dm)}')
-                    ax.annotate(rf"$\frac{{\chi^2}}{{ndf}} = \frac{{{np.round(fitres['chi2'][dm][nj],2)}}}{{{fitres['ndf'][dm][nj]}}}$",
-                                (0.8, 0.9),
+                    ax.set_title(f'Jet Fake Factors : Tau PNet Decay Mode {dm}, Njets {nj}')
+                    ax.annotate(rf"$\frac{{\chi^2}}{{ndf}} = \frac{{{np.round(fitres['chi2'],2)}}}{{{fitres['ndf']}}}$",
+                                (0.8, 0.75),
                                 xycoords='axes fraction',
                                 fontsize=20)
-                    print(str(fitres['fitf_str'][dm][nj]))
-                    ax.annotate('y=' + str(fitres['fitf_str'][dm][nj]),
-                                (0.1, 0.9),
+                    
+                    formula_str = eval_formula(fitres['fitf_str'],popt, make_rounding=True)
+                    
+                    ax.annotate('y=' + formula_str,
+                                (0.01, 0.95),
                                 xycoords='axes fraction',
                                 fontsize=12)
                     
