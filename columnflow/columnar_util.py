@@ -20,7 +20,7 @@ import threading
 import multiprocessing
 import multiprocessing.pool
 from functools import partial
-from collections import namedtuple, OrderedDict, deque
+from collections import namedtuple, OrderedDict, deque, defaultdict
 
 import law
 import order as od
@@ -1356,6 +1356,7 @@ def ak_copy(ak_array: ak.Array) -> ak.Array:
     return layout_ak_array(np.array(ak.flatten(ak_array)), ak_array)
 
 
+
 def fill_hist(
     h: hist.Hist,
     data: ak.Array | np.array | dict[str, ak.Array | np.array],
@@ -1406,7 +1407,6 @@ def fill_hist(
             data[ax.name] = ak.copy(data[ax.name])
             flat_np_view(data[ax.name])[right_egde_mask] -= ax.widths[-1] * 1e-5
 
-    # fill
     if 'event' in data.keys():
         arrays = {}
         for ax_name in axis_names:
@@ -1416,6 +1416,7 @@ def fill_hist(
     else:
         arrays = ak.flatten(ak.cartesian(data))
         h.fill(**fill_kwargs, **{field: arrays[field] for field in arrays.fields})
+
 
 
 class RouteFilter(object):
@@ -1848,6 +1849,9 @@ class ArrayFunction(Derivable):
                         f"to set: {e.args[0]}",
                     )
                     raise e
+
+                # remove keyword from further processing
+                kwargs.pop(attr)
             else:
                 try:
                     deps = set(law.util.make_list(getattr(self.__class__, attr)))
@@ -1862,11 +1866,15 @@ class ArrayFunction(Derivable):
             # also register a set for storing instances, filled in create_dependencies
             setattr(self, f"{attr}_instances", set())
 
+        # set all other keyword arguments as instance attributes
+        for attr, value in kwargs.items():
+            setattr(self, attr, value)
+
         # dictionary of dependency class to instance, set in create_dependencies
         self.deps = DotDict()
 
         # dictionary of keyword arguments mapped to dependenc classes to be forwarded to their init
-        self.deps_kwargs = DotDict()
+        self.deps_kwargs = defaultdict(dict)  # TODO: avoid using `defaultdict`
 
         # deferred part of the initialization
         if deferred_init:
@@ -1931,8 +1939,15 @@ class ArrayFunction(Derivable):
             self.init_func()
 
         # instantiate dependencies again, but only perform updates
-        self.create_dependencies(instance_cache, only_update=True)
+        # self.create_dependencies(instance_cache, only_update=True)
 
+        # NOTE: the above does not correctly propagate `deps_kwargs` to the dependencies.
+        # As a workaround, instantiate all dependencies fully a second time by
+        # invalidating the instance cache and setting `only_update` to False
+        instance_cache = {}
+        self.create_dependencies(instance_cache, only_update=False)
+
+        # NOTE: return value currently not being used anywhere -> remove?
         return instance_cache
 
     def create_dependencies(

@@ -79,6 +79,11 @@ class PlotBase(ConfigTask):
         "exceeds a certain threshold; defaults to the `default_blinding_threshold` aux field of "
         "the config",
     )
+    legend_yields = luigi.BoolParameter(
+        default=True,
+        significant=False,
+        description="when True, the legend will display yields; when False, the legend will not show yields",
+    )
     exclude_params_remote_workflow = {"debug_plot"}
 
     @classmethod
@@ -121,6 +126,7 @@ class PlotBase(ConfigTask):
             "blinding_threshold",
             None if self.blinding_threshold == law.NO_FLOAT else self.blinding_threshold,
         )
+        dict_add_strict(params, "legend_yields", self.legend_yields)
         return params
 
     def plot_parts(self) -> law.util.InsertableDict:
@@ -271,7 +277,7 @@ class PlotBase(ConfigTask):
         # update style_config
         style_config = kwargs.get("style_config", {})
         if isinstance(custom_style_config, dict) and isinstance(style_config, dict):
-            style_config = law.util.merge_dicts(custom_style_config, style_config)
+            style_config = law.util.merge_dicts(style_config, custom_style_config)
             kwargs["style_config"] = style_config
 
         # update other defaults

@@ -281,6 +281,7 @@ def normalization_weights_setup(
         for stats in selection_stats.values():
             MergeSelectionStats.merge_counts(merged_selection_stats, stats)
     else:
+
         merged_selection_stats = selection_stats[self.dataset_inst.name]
 
     # determine all proceses at any depth in the stitching datasets
@@ -337,11 +338,10 @@ def normalization_weights_setup(
             else 0
         )
 
-        # fill the process weight table
-        for proc_id, br in branching_ratios.items():
-            #sum_weights = merged_selection_stats["sum_mc_weight_per_process"][str(proc_id)]
+        for process_id, br in branching_ratios.items():
+            #sum_weights = merged_selection_stats["sum_mc_weight_per_process"][str(process_id)]
             sum_weights = self.dataset_inst.n_events
-            process_weight_table[0, proc_id] = lumi * inclusive_xsec * br / sum_weights
+            process_weight_table[0, process_id] = lumi * inclusive_xsec * br / sum_weights
     else:
         # fill the process weight table with per-process cross sections
         for process_inst in process_insts:
