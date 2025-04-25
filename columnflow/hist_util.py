@@ -72,9 +72,24 @@ def fill_hist(
             flat_np_view(data[ax.name])[right_egde_mask] -= ax.widths[-1] * 1e-5
 
     # fill
+    
     flat_data = {}
+    arr_shape = None
     for key, arr in data.items():
-        if arr.ndim != 1: flat_data[key] = ak.flatten(arr)
+        if arr.ndim > 1:
+            logger.warning(
+                f"Found axis {key} that is not 1-dimensional: trying to broadcast all other axes:"
+            )
+            arr_shape = ak.local_index(arr)
+            
+    for key, arr in data.items():
+        if arr_shape is not None:
+            if arr.ndim == 1:
+                _, br_arr = ak.broadcast_arrays(arr_shape, arr)
+                flat_data[key] = ak.flatten(br_arr)
+            else:
+                flat_data[key] = ak.flatten(arr)
+
         else: flat_data[key] = arr
     h.fill(**fill_kwargs, **flat_data)
      

@@ -613,7 +613,7 @@ class ComputeFakeFactors(
                     if dm==0:
                         the_bounds = ([-10,-5,-1],[10,5,1])
                     else:
-                        the_bounds = ([-0.5, -1, 0],[0.5,1,0.1])
+                        the_bounds = ([-0.5, -3, 0],[0.5,3,0.1])
                     popt, pcov, infodict, mesg, ier = curve_fit(fitf,
                                            x_masked,
                                            y,
