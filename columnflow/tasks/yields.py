@@ -383,14 +383,20 @@ class CreateYieldTable(
                 # load the histogram of the variable named "event"
                 input_hists = inp["hists"]["event"].load(formatter="pickle")
                 
-                
                 for the_cat, the_hist in input_hists.items():
                     if the_cat not in merged_hists.keys():
                         merged_hists[the_cat] = []
+                        merged_hists[the_cat].append(the_hist)
                     else:
                         merged_hists[the_cat].append(the_hist)
                 #merge histograms
-            merged_hists_ = {the_cat: sum(h[1:],h[0].copy()) for the_cat, h in merged_hists.items()}
+                
+            merged_hists_ = {}
+            for the_cat, h in merged_hists.items():
+                if len(h) > 1: merged_hists_[the_cat] =  sum(h[1:],h[0].copy()) 
+                else: 
+                    merged_hists_[the_cat] = h[0].copy()
+            
             hists_per_proc = {} 
             for the_cat, the_hist in merged_hists_.items():
                 hists_per_proc[the_cat] = {}
@@ -403,7 +409,7 @@ class CreateYieldTable(
                             h = h[{"process": hist.loc(leaf_proc.id)}]
                             
                             if proc in hists_per_proc[the_cat]:
-                                hists_per_proc[the_cat][proc] +=h
+                                hists_per_proc[the_cat][proc] += h
                             else:
                                 hists_per_proc[the_cat][proc] = h
                                 
