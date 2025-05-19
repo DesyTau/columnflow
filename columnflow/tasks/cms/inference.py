@@ -211,24 +211,19 @@ class CreateDatacards(
                         continue
 
                     # open the histogram and work on a copy
-                    h = _inp["collection"][0]["hists"][variable_inst.name].load(formatter="pickle").copy()
-
+                    h_dict = _inp["collection"][0]["hists"][variable_inst.name].load(formatter="pickle").copy()
+                    h = h_dict[cat_obj.name].copy()
                     # axis selections
                     h = h[{
                         "process": [
                             hist.loc(p.id)
                             for p in sub_process_insts
                             if p.id in h.axes["process"]
-                        ],
-                        "category": [
-                            hist.loc(c.id)
-                            for c in leaf_category_insts
-                            if c.id in h.axes["category"]
-                        ],
+                        ]
                     }]
 
                     # axis reductions
-                    h = h[{"process": sum, "category": sum}]
+                    h = h[{"process": sum}]
 
                     # add the histogram for this dataset
                     if h_proc is None:
