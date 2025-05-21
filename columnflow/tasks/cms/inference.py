@@ -194,14 +194,12 @@ class CreateDatacards(
                 if proc_obj_name == "data":
                     proc_obj = None
                     process_inst = self.config_inst.get_process("data")
-                elif proc_obj_name != "qcd" and proc_obj_name != "wj":
+                elif proc_obj_name != "qcd" and proc_obj_name != "jet_fakes":
                     proc_obj = self.inference_model_inst.get_process(proc_obj_name, category=cat_obj.name)
                     process_inst = self.config_inst.get_process(proc_obj.config_process)
                 else: 
                     continue
                 sub_process_insts = [sub for sub, _, _ in process_inst.walk_processes(include_self=True)]
-                process_insts.append(process_inst)
-                h_proc = None
                 for dataset, _inp in inp.items():
                     dataset_inst = self.config_inst.get_dataset(dataset)
                     h_dict = _inp["collection"][0]["hists"][variable_inst.name].load(formatter="pickle").copy()
@@ -238,24 +236,16 @@ class CreateDatacards(
                     if hists[region][process_inst] is None:
                         raise Exception(f"no histograms found for process '{process_inst.name}'")
 
-
-
-            if category_inst.aux: #Assume that aux exists only for signal regions since it contains the information about application and determination regions
-                if self.hist_hooks:
-                    hists = self.invoke_hist_hooks(hists,category_inst)
-                else:
-                    hists = hists[category_inst.name]
-                for process_inst in hists:
-                    if process_inst not in process_insts:
-                        process_insts.append(process_inst) 
-            else:    # get the histogram for the pro   
-                hists = hists[category_inst.name]   
+            if self.hist_hooks and category_inst.aux: #Assume that aux exists only for signal regions since it contains the information about application and determination regions
+                hists = self.invoke_hist_hooks(hists,category_inst)
+            else:
+                hists = hists[category_inst.name]
+            # prepare the hists to be used in the datacard writer
             datacard_hists = OrderedDict()
-            for process_inst in process_insts:
+            for process_inst in hists.keys():
                 # get the histogram for the process
                 datacard_hists[process_inst.name] = OrderedDict()
                 nominal_shift_inst = self.config_inst.get_shift("nominal")
-                # add the histogram to the datacard
                 datacard_hists[process_inst.name]["nominal"] = hists[process_inst][{"shift": hist.loc(nominal_shift_inst.id)}]
 
             # forward objects to the datacard writer
