@@ -325,6 +325,7 @@ class InferenceModel(Derivable):
         name: str,
         config_process: str | None = None,
         is_signal: bool = False,
+        data_driven: bool = False,
         config_mc_datasets: Sequence[str] | None = None,
         scale: float | int = 1.0,
     ) -> DotDict:
@@ -333,6 +334,7 @@ class InferenceModel(Derivable):
 
             - *name*: The name of the process in the model.
             - *is_signal*: A boolean flag deciding whether this process describes signal.
+            - *data_driven*: A boolean flag deciding whether this process is data driven.
             - *config_process*: The name of the source process in the config to use.
             - *config_mc_datasets*: List of names or patterns of MC datasets in the config to use.
             - *scale*: A float value to scale the process, defaulting to 1.0.
@@ -340,6 +342,7 @@ class InferenceModel(Derivable):
         return DotDict([
             ("name", str(name)),
             ("is_signal", bool(is_signal)),
+            ("data_driven", bool(data_driven)),
             ("config_process", str(config_process) if config_process else None),
             ("config_mc_datasets", list(map(str, config_mc_datasets or []))),
             ("scale", float(scale)),

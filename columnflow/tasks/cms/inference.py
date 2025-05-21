@@ -191,11 +191,11 @@ class CreateDatacards(
         #prepare histogram objects 
         with self.publish_step(f"extracting {variable_inst.name} in {category_inst.name} ..."):
             for proc_obj_name, inp in inputs.items():
+                proc_obj = self.inference_model_inst.get_process(proc_obj_name, category=cat_obj.name)
                 if proc_obj_name == "data":
                     proc_obj = None
                     process_inst = self.config_inst.get_process("data")
-                elif proc_obj_name != "qcd" and proc_obj_name != "jet_fakes":
-                    proc_obj = self.inference_model_inst.get_process(proc_obj_name, category=cat_obj.name)
+                elif not proc_obj.data_driven : # data driven processes will be added later with invoke_hist_hooks
                     process_inst = self.config_inst.get_process(proc_obj.config_process)
                 else: 
                     continue
