@@ -10,7 +10,7 @@ import law
 
 from columnflow.tasks.framework.base import Requirements, AnalysisTask, wrapper_factory
 from columnflow.tasks.framework.mixins import (
-    CalibratorsMixin, SelectorStepsMixin, ProducersMixin, MLModelsMixin, InferenceModelMixin,
+    CalibratorsMixin, SelectorStepsMixin, ProducersMixin, MLModelsMixin, InferenceModelMixin, HistHookMixin
 )
 from columnflow.tasks.framework.remote import RemoteWorkflow
 from columnflow.tasks.histograms import MergeHistograms, MergeShiftedHistograms
@@ -19,6 +19,7 @@ from columnflow.config_util import get_datasets_from_process
 
 
 class CreateDatacards(
+    HistHookMixin,
     InferenceModelMixin,
     MLModelsMixin,
     ProducersMixin,
@@ -183,87 +184,73 @@ class CreateDatacards(
         category_inst = self.config_inst.get_category(cat_obj.config_category)
         variable_inst = self.config_inst.get_variable(cat_obj.config_variable)
         leaf_category_insts = category_inst.get_leaf_categories() or [category_inst]
-
+  
         # histogram data per process
         hists = OrderedDict()
-
+        process_insts = []
+        #prepare histogram objects 
         with self.publish_step(f"extracting {variable_inst.name} in {category_inst.name} ..."):
             for proc_obj_name, inp in inputs.items():
+                proc_obj = self.inference_model_inst.get_process(proc_obj_name, category=cat_obj.name)
                 if proc_obj_name == "data":
                     proc_obj = None
                     process_inst = self.config_inst.get_process("data")
-                else:
-                    proc_obj = self.inference_model_inst.get_process(proc_obj_name, category=cat_obj.name)
+                elif not proc_obj.data_driven : # data driven processes will be added later with invoke_hist_hooks
                     process_inst = self.config_inst.get_process(proc_obj.config_process)
+                else: 
+                    continue
                 sub_process_insts = [sub for sub, _, _ in process_inst.walk_processes(include_self=True)]
-
-                h_proc = None
                 for dataset, _inp in inp.items():
                     dataset_inst = self.config_inst.get_dataset(dataset)
-
-                    # skip when the dataset is already known to not contain any sub process
-                    if not any(map(dataset_inst.has_process, sub_process_insts)):
-                        self.logger.warning(
-                            f"dataset '{dataset}' does not contain process '{process_inst.name}' "
-                            "or any of its subprocesses which indicates a misconfiguration in the "
-                            f"inference model '{self.inference_model}'",
-                        )
-                        continue
-
-                    # open the histogram and work on a copy
-                    h = _inp["collection"][0]["hists"][variable_inst.name].load(formatter="pickle").copy()
-
-                    # axis selections
-                    h = h[{
-                        "process": [
-                            hist.loc(p.id)
-                            for p in sub_process_insts
-                            if p.id in h.axes["process"]
-                        ],
-                        "category": [
-                            hist.loc(c.id)
-                            for c in leaf_category_insts
-                            if c.id in h.axes["category"]
-                        ],
-                    }]
-
-                    # axis reductions
-                    h = h[{"process": sum, "category": sum}]
-
-                    # add the histogram for this dataset
-                    if h_proc is None:
-                        h_proc = h
-                    else:
-                        h_proc += h
-
-                # there must be a histogram
-                if h_proc is None:
-                    raise Exception(f"no histograms found for process '{process_inst.name}'")
-
-                # create the nominal hist
-                hists[proc_obj_name] = OrderedDict()
-                nominal_shift_inst = self.config_inst.get_shift("nominal")
-                hists[proc_obj_name]["nominal"] = h_proc[
-                    {"shift": hist.loc(nominal_shift_inst.id)}
-                ]
-
-                # per shift
-                if proc_obj:
-                    for param_obj in proc_obj.parameters:
-                        # skip the parameter when varied hists are not needed
-                        if not self.inference_model_inst.require_shapes_for_parameter(param_obj):
+                    h_dict = _inp["collection"][0]["hists"][variable_inst.name].load(formatter="pickle").copy()
+                    
+                    for region in h_dict.keys():
+                        if region not in hists: hists[region] = {}    
+                        # skip when the dataset is already known to not contain any sub process
+                        if not any(map(dataset_inst.has_process, sub_process_insts)):
+                            self.logger.warning(
+                                f"dataset '{dataset}' does not contain process '{process_inst.name}' "
+                                "or any of its subprocesses which indicates a misconfiguration in the "
+                                f"inference model '{self.inference_model}'",
+                            )
                             continue
-                        # store the varied hists
-                        hists[proc_obj_name][param_obj.name] = {}
-                        for d in ["up", "down"]:
-                            shift_inst = self.config_inst.get_shift(f"{param_obj.config_shift_source}_{d}")
-                            hists[proc_obj_name][param_obj.name][d] = h_proc[
-                                {"shift": hist.loc(shift_inst.id)}
+                        # open the histogram and work on a copy
+                        h = h_dict[region]
+                        # axis selections
+                        h = h[{
+                            "process": [
+                                hist.loc(p.id)
+                                for p in sub_process_insts
+                                if p.id in h.axes["process"]
                             ]
+                        }]
+
+                        # axis reductions
+                        h = h[{"process": sum}]
+                        if process_inst in hists[region]:
+                            hists[region][process_inst] += h
+                        else:
+                            hists[region][process_inst] = h
+
+                    # there must be a histogra
+                    if hists[region][process_inst] is None:
+                        raise Exception(f"no histograms found for process '{process_inst.name}'")
+
+            if self.hist_hooks and category_inst.aux: #Assume that aux exists only for signal regions since it contains the information about application and determination regions
+                hists = self.invoke_hist_hooks(hists,category_inst)
+            else:
+                hists = hists[category_inst.name]
+            # prepare the hists to be used in the datacard writer
+            datacard_hists = OrderedDict()
+            for process_inst in hists.keys():
+                # get the histogram for the process
+                datacard_hists[process_inst.name] = OrderedDict()
+                nominal_shift_inst = self.config_inst.get_shift("nominal")
+                datacard_hists[process_inst.name]["nominal"] = hists[process_inst][{"shift": hist.loc(nominal_shift_inst.id)}]
 
             # forward objects to the datacard writer
             outputs = self.output()
-            writer = DatacardWriter(self.inference_model_inst, {cat_obj.name: hists})
+            writer = DatacardWriter(self.inference_model_inst, {cat_obj.name: datacard_hists})
             with outputs["card"].localize("w") as tmp_card, outputs["shapes"].localize("w") as tmp_shapes:
                 writer.write(tmp_card.abspath, tmp_shapes.abspath, shapes_path_ref=outputs["shapes"].basename)
 

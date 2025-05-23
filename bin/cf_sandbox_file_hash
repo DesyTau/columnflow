@@ -11,6 +11,6 @@ action() {
         setopt globdots
     fi
 
-    python "${this_dir}/$( basename "${this_file}" ).py" "$@"
+    python3 "${this_dir}/$( basename "${this_file}" ).py" "$@"
 }
 action "$@"
