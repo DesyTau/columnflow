@@ -92,6 +92,7 @@ class CreateDatacards(
 
         for cat_obj in self.branch_map.values():
             for proc_obj in cat_obj.processes:
+                if proc_obj.data_driven: continue
                 for dataset in self.get_mc_datasets(proc_obj):
                     # add all required variables and shifts per dataset
                     mc_dataset_params[dataset]["variables"].add(cat_obj.config_variable)
@@ -100,10 +101,8 @@ class CreateDatacards(
                         for param_obj in proc_obj.parameters
                         if self.inference_model_inst.require_shapes_for_parameter(param_obj)
                     )
-
             for dataset in self.get_data_datasets(cat_obj):
                 data_dataset_params[dataset]["variables"].add(cat_obj.config_variable)
-
         # set workflow requirements per mc dataset
         reqs["merged_hists"] = set(
             self.reqs.MergeShiftedHistograms.req_different_branching(
@@ -129,6 +128,7 @@ class CreateDatacards(
 
     def requires(self):
         cat_obj = self.branch_data
+        processes = [proc_obj for proc_obj in cat_obj.processes if not proc_obj.data_driven]
         reqs = {
             proc_obj.name: {
                 dataset: self.reqs.MergeShiftedHistograms.req_different_branching(
@@ -143,9 +143,9 @@ class CreateDatacards(
                     branch=-1,
                     workflow="local",
                 )
-                for dataset in self.get_mc_datasets(proc_obj)
+                for dataset in self.get_mc_datasets(proc_obj) 
             }
-            for proc_obj in cat_obj.processes
+            for proc_obj in processes
         }
         if cat_obj.config_data_datasets:
             reqs["data"] = {
@@ -191,19 +191,20 @@ class CreateDatacards(
         #prepare histogram objects 
         with self.publish_step(f"extracting {variable_inst.name} in {category_inst.name} ..."):
             for proc_obj_name, inp in inputs.items():
-                proc_obj = self.inference_model_inst.get_process(proc_obj_name, category=cat_obj.name)
                 if proc_obj_name == "data":
                     proc_obj = None
                     process_inst = self.config_inst.get_process("data")
-                elif not proc_obj.data_driven : # data driven processes will be added later with invoke_hist_hooks
-                    process_inst = self.config_inst.get_process(proc_obj.config_process)
-                else: 
-                    continue
+                else:
+                    proc_obj = self.inference_model_inst.get_process(proc_obj_name, category=cat_obj.name)
+                    if not proc_obj.data_driven: # data driven processes will be added later with invoke_hist_hooks
+                        process_inst = self.config_inst.get_process(proc_obj.config_process)
+                    else: 
+                        pass
+                
                 sub_process_insts = [sub for sub, _, _ in process_inst.walk_processes(include_self=True)]
                 for dataset, _inp in inp.items():
                     dataset_inst = self.config_inst.get_dataset(dataset)
                     h_dict = _inp["collection"][0]["hists"][variable_inst.name].load(formatter="pickle").copy()
-                    
                     for region in h_dict.keys():
                         if region not in hists: hists[region] = {}    
                         # skip when the dataset is already known to not contain any sub process
@@ -235,19 +236,25 @@ class CreateDatacards(
                     # there must be a histogra
                     if hists[region][process_inst] is None:
                         raise Exception(f"no histograms found for process '{process_inst.name}'")
-
             if self.hist_hooks and category_inst.aux: #Assume that aux exists only for signal regions since it contains the information about application and determination regions
                 hists = self.invoke_hist_hooks(hists,category_inst)
             else:
                 hists = hists[category_inst.name]
             # prepare the hists to be used in the datacard writer
             datacard_hists = OrderedDict()
-            for process_inst in hists.keys():
-                # get the histogram for the process
-                datacard_hists[process_inst.name] = OrderedDict()
-                nominal_shift_inst = self.config_inst.get_shift("nominal")
-                datacard_hists[process_inst.name]["nominal"] = hists[process_inst][{"shift": hist.loc(nominal_shift_inst.id)}]
-
+            for combine_proc, proc_name in self.inference_model_inst.proc_map.items():
+                process_inst = [the_proc for the_proc in hists.keys() if the_proc.name == proc_name]
+                if len(process_inst) and not (hists[process_inst[0]].empty()):
+                    # get the histogram for the process
+                    datacard_hists[combine_proc] = OrderedDict()
+                    nominal_shift_inst = self.config_inst.get_shift("nominal")
+                    datacard_hists[combine_proc]["nominal"] = hists[process_inst[0]][{"shift": hist.loc(nominal_shift_inst.id)}]
+            # add data:
+            data_proc = [the_proc for the_proc in hists.keys() if the_proc.name == 'data'] 
+            datacard_hists['data'] = OrderedDict()
+            nominal_shift_inst = self.config_inst.get_shift("nominal")
+            datacard_hists['data']["nominal"] = hists[data_proc[0]][{"shift": hist.loc(nominal_shift_inst.id)}]
+    
             # forward objects to the datacard writer
             outputs = self.output()
             writer = DatacardWriter(self.inference_model_inst, {cat_obj.name: datacard_hists})

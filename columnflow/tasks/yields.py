@@ -367,7 +367,7 @@ class CreateYieldTable(
         inputs = self.input()
         outputs = self.output()
 
-        category_insts = list(map(self.config_inst.get_category, self.categories))
+        category_insts = list(self.categories)
         process_insts = list(map(self.config_inst.get_process, self.processes))
         sub_process_insts = {
             proc: [sub for sub, _, _ in proc.walk_processes(include_self=True)]
@@ -383,7 +383,8 @@ class CreateYieldTable(
                 # load the histogram of the variable named "event"
                 input_hists = inp["hists"]["event"].load(formatter="pickle")
                 
-                for the_cat, the_hist in input_hists.items():
+                for the_cat in category_insts:
+                    the_hist = input_hists[the_cat]
                     if the_cat not in merged_hists.keys():
                         merged_hists[the_cat] = []
                         merged_hists[the_cat].append(the_hist)
