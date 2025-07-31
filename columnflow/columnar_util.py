@@ -2465,6 +2465,19 @@ class TaskArrayFunction(ArrayFunction):
         """
         cls.setup_func = func
 
+    @classmethod
+    def teardown(cls, func: Callable[[dict], None]) -> None:
+        """
+        Decorator to wrap a function *func* that should be registered as :py:meth:`teardown_func`
+        which is used to perform a custom teardown of objects at the end of processing. The function
+        should accept one argument:
+
+            - *task*, the invoking task instance.
+
+        The decorator does not return the wrapped function.
+        """
+        cls.teardown_func = func
+
     def __init__(
         self,
         *args,

@@ -271,20 +271,36 @@ def plot_shifted_variable(
     plot_config = {}
     colors = {
         "nominal": "black",
-        "up": "red",
-        "down": "blue",
+        "up": "blue",
+        "down": "red",
     }
+    shift_names = {
+        "nominal": "max mixing",
+        "ts_up": "CP-odd",
+        "ts_down": "CP-even",
+    }
+    
+    hist_up = None 
+    hist_down = None
+    hist_up_err = None
+    hist_down_err = None
     for i, shift_id in enumerate(h_sum.axes["shift"]):
         shift_inst = config_inst.get_shift(shift_id)
-
+       
         h = h_sum[{"shift": hist.loc(shift_id)}]
+        if "up" in shift_inst.label:
+            hist_up = h.values()
+            hist_up_err = h.variances()
+        elif "down" in shift_inst.label:
+            hist_down = h.values()
+            hist_down_err = h.variances()
         # assuming `nominal` always has shift id 0
         ratio_norm = h_sum[{"shift": hist.loc(0)}].values()
 
         diff = sum(h.values()) / sum(ratio_norm) - 1
-        label = shift_inst.label
+        label = shift_names[shift_inst.label]
         if not shift_inst.is_nominal:
-            label += " ({0:+.2f}%)".format(diff * 100)
+            pass #label +=  " ({0:+.2f}%)".format(diff * 100)
 
         plot_config[shift_inst.name] = plot_cfg = {
             "method": "draw_hist",
@@ -302,8 +318,18 @@ def plot_shifted_variable(
         if hide_errors:
             for key in ("kwargs", "ratio_kwargs"):
                 if key in plot_cfg:
-                    plot_cfg[key]["yerr"] = None
+                    plot_cfg[key]["yerr"] = False
+    h_sum = (hist_up + hist_down)
+    mask = (h_sum > 0)
+    asym_hist = np.where(mask, 
+                         np.abs(hist_up - hist_down)/h_sum,
+                         0)
+    herr_num = np.sqrt(hist_up_err + hist_down_err)
+    herr_den = np.sqrt(hist_up_err + hist_down_err)
+    dA = np.average(np.sqrt( (herr_num/h_sum)**2 + (herr_den*np.abs(hist_up - hist_down)/h_sum/h_sum)**2))
 
+    A = np.average(asym_hist)
+    
     # legend title setting
     if not legend_title and len(hists) == 1:
         # use process label as default if 1 process
@@ -318,6 +344,9 @@ def plot_shifted_variable(
     )
     default_style_config["rax_cfg"]["ylim"] = (0.75, 1.25)
     default_style_config["rax_cfg"]["ylabel"] = "Ratio"
+    
+    default_style_config["annotate_cfg"]["text"] = f'A={A:1.3f}$\pm${dA:1.3f}'
+    default_style_config["annotate_cfg"]["fontsize"] = 22
     if legend_title:
         default_style_config["legend_cfg"]["title"] = legend_title
 
