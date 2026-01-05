@@ -645,7 +645,7 @@ def split_ax_kwargs(kwargs: dict[str, Any]) -> tuple[dict[str, Any], dict[str, A
     set_kwargs, other_kwargs = {}, {}
     other_keys = {
         "xmajorticks", "xminorticks", "xmajorticklabels", "xminorticklabels", "xloc", "xrotation",
-        "ymajorticks", "yminorticks", "yloc", "yrotation",
+        "ymajorticks", "yminorticks", "yloc", "yrotation","grid"
     }
     for key, value in kwargs.items():
         (other_kwargs if key in other_keys else set_kwargs)[key] = value
@@ -684,6 +684,8 @@ def apply_ax_kwargs(ax: plt.Axes, kwargs: dict[str, Any]) -> None:
         ax.tick_params(axis="x", labelrotation=other_kwargs.get("xrotation"))
     if other_kwargs.get("yrotation") is not None:
         ax.tick_params(axis="y", labelrotation=other_kwargs.get("yrotation"))
+    if other_kwargs.get("grid") is not None:
+        ax.grid(**other_kwargs.get("grid"))
 
 
 def get_position(minimum: float, maximum: float, factor: float = 1.4, logscale: bool = False) -> float:
