@@ -1175,6 +1175,55 @@ def mask_from_indices(indices: np.array | ak.Array, layout_array: ak.Array) -> a
     return layout_ak_array(flat_mask, layout_array)
 
 
+def embed_with_mask(
+    ak_array: ak.Array,
+    embed_mask: ak.Array,
+    layout_array: ak.Array,
+    *,
+    value: Any = UNSET,
+    dtype: Any = None,
+) -> ak.Array:
+    """
+    Embeds the values of an *ak_array* into a new array shaped like *layout_array* at locations defined by
+    *embed_mask*. The missing values are taken from *layout_array* when *value* is not set, and set to *value* with a
+    custom *dtype* otherwise.
+
+    Example:
+
+    :code-block:: python
+
+        data = ak.Array([1, 2])
+        embed_mask = [True, False, False, True]
+        layout_array = [w, x, y, z]
+        value = 99
+
+        embed_with_mask(data, embed_mask, layout_array, value=99)
+        # -> [1, 99, 99, 2]
+
+    :param ak_array: The array with data to embed into a new, larger array.
+    :param embed_mask: The boolean mask defining the locations to embed the values of *ak_array*.
+    :param layout_array: The array defining the layout of the output array.
+    :param value: The value to fill in for missing values when *value* is set.
+    :param dtype: The data type to use when *value* is set.
+    :return: A new array shapes like *layout_array* with values of *ak_array* at locations defined by *embed_mask*.
+    """
+    # define the new array in a flattened form
+    flat_out_array = flat_np_view(
+        ak.copy(layout_array)
+        if value is UNSET
+        else full_like(layout_array, value, dtype=dtype),
+    )
+
+    # define the location mask based on the embed mask
+    broadcasted_embed_mask = ak.fill_none(full_like(layout_array, True, dtype=bool), True, axis=1) & embed_mask
+
+    # insert flat data array into the output array
+    flat_out_array[flat_np_view(broadcasted_embed_mask)] = flat_np_view(ak_array)
+
+    # restructure the output array
+    return layout_ak_array(flat_out_array, layout_array)
+
+
 def full_like(layout_array: ak.Array, value: Any, *, dtype: Any = None, **kwargs) -> ak.Array:
     """
     Creates an awkward array with the same layout as *layout_array* and fills it with a constant
