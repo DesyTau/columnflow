@@ -1182,6 +1182,7 @@ def embed_with_mask(
     *,
     value: Any = UNSET,
     dtype: Any = None,
+    flat: bool = False,
 ) -> ak.Array:
     """
     Embeds the values of an *ak_array* into a new array shaped like *layout_array* at locations defined by
@@ -1205,6 +1206,7 @@ def embed_with_mask(
     :param layout_array: The array defining the layout of the output array.
     :param value: The value to fill in for missing values when *value* is set.
     :param dtype: The data type to use when *value* is set.
+    :param flat: Whether to return the output array in a flattened form.
     :return: A new array shapes like *layout_array* with values of *ak_array* at locations defined by *embed_mask*.
     """
     # define the new array in a flattened form
@@ -1220,8 +1222,8 @@ def embed_with_mask(
     # insert flat data array into the output array
     flat_out_array[flat_np_view(broadcasted_embed_mask)] = flat_np_view(ak_array)
 
-    # restructure the output array
-    return layout_ak_array(flat_out_array, layout_array)
+    # optionally restructure the output array
+    return flat_out_array if flat else layout_ak_array(flat_out_array, layout_array)
 
 
 def full_like(layout_array: ak.Array, value: Any, *, dtype: Any = None, **kwargs) -> ak.Array:
