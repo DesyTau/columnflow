@@ -347,11 +347,11 @@ def normalization_weights_setup(
             if self.dataset_inst == inclusive_dataset
             else 0
         )
-
         # fill the process weight table
         for proc_id, br in branching_ratios.items():
             sum_weights = self.dataset_inst.n_events #normalizing to the number of events instead of sum of weights
             process_weight_table[0, proc_id] = lumi * inclusive_xsec * br / sum_weights
+        
     else:
         # fill the process weight table with per-process cross sections
         for process_inst in process_insts:
@@ -363,7 +363,6 @@ def normalization_weights_setup(
             sum_weights = self.dataset_inst.n_events  #normalizing to the number of events instead of sum of weights
             xsec = process_inst.get_xsec(self.config_inst.campaign.ecm).nominal
             process_weight_table[0, process_inst.id] = lumi * xsec / sum_weights
-
     self.process_weight_table = process_weight_table
     self.xs_process_ids = set(self.process_weight_table.rows[0])
 
